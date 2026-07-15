@@ -1,6 +1,6 @@
-import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { suggestionChips } from "../data/mock";
+import { getRecurringQuestions, type RecurringQuestion } from "../api";
 
 const conversationId = "service-credit";
 
@@ -27,7 +27,19 @@ export default function Chats() {
   const [audience, setAudience] = useState("Employee");
   const [openMenu, setOpenMenu] = useState<"sources" | "audience" | null>(null);
   const [attachment, setAttachment] = useState("");
+  const [recurringQuestions, setRecurringQuestions] = useState<RecurringQuestion[]>([]);
+  const [loadingRecurringQuestions, setLoadingRecurringQuestions] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    void getRecurringQuestions().then((questions) => {
+      if (active) setRecurringQuestions(questions);
+    }).finally(() => {
+      if (active) setLoadingRecurringQuestions(false);
+    });
+    return () => { active = false; };
+  }, []);
 
   const openConversation = (submittedQuestion = question) => {
     const trimmedQuestion = submittedQuestion.trim();
@@ -80,11 +92,14 @@ export default function Chats() {
         <p aria-live="polite" className="mt-2 min-h-5 text-xs text-inkmuted">{attachment || `Searching ${sourceScope.toLowerCase()} for ${audience.toLowerCase()} guidance.`}</p>
       </form>
 
-      <div className="mt-9 flex flex-wrap justify-center gap-4">
-        {suggestionChips.map((chip) => (
-          <button key={chip} type="button" onClick={() => openConversation(chip)} className="rounded-lg border border-navy/20 bg-white px-6 py-2.5 text-sm font-medium text-navy shadow-card transition hover:border-brand-blue hover:text-brand-blue">{chip}</button>
-        ))}
-      </div>
+      <section className="mt-9 w-full max-w-[814px]" aria-labelledby="common-policy-questions">
+        <h2 id="common-policy-questions" className="text-center text-sm font-semibold uppercase tracking-[0.08em] text-navy/75">Common policy questions</h2>
+        {loadingRecurringQuestions
+          ? <p className="mt-4 text-center text-sm text-inkmuted">Loading common questions…</p>
+          : <div className="mt-4 flex flex-wrap justify-center gap-4">{recurringQuestions.map((question) => (
+            <button key={question.questionId} type="button" onClick={() => openConversation(question.questionText)} className="rounded-lg border border-navy/20 bg-white px-6 py-2.5 text-sm font-medium text-navy shadow-card transition hover:border-brand-blue hover:text-brand-blue">{question.questionText}</button>
+          ))}</div>}
+      </section>
     </section>
   );
 }

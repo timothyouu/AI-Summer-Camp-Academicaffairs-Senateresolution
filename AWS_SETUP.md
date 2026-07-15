@@ -35,6 +35,16 @@ by default). The production model ID remains an explicit deployment choice.
 
 ## 2. Deploy the stack
 
+Before deployment, create or verify the retained application-memory tables
+(feedback, recurring questions, access control, source registry, and draft
+versions). The stack imports these names instead of replacing Yaza's existing
+tables:
+
+```bash
+./scripts/setup_dynamodb_tables.sh
+./scripts/verify_dynamodb_tables.sh
+```
+
 ```bash
 source backend/.venv/bin/activate
 cd infra

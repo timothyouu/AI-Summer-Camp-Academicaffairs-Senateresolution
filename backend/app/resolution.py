@@ -60,12 +60,15 @@ def check_resolution(payload: ResolutionRequest, _: None = Depends(require_revie
             agent_trace=pipeline_result.agent_trace,
         )
     if "three-inch binder" in normalized or "three inch binder" in normalized:
-        conflict = create_or_get_conflict(ConflictCreate(
-            source_a="CSUB University Handbook Appendix G",
-            source_b="RES 252644",
-            topic="WPAF evidence format",
-            description="The draft retains paper-era binder guidance that the supplied later resolution replaces with electronic organization.",
-        ))
+        conflict = create_or_get_conflict(
+            ConflictCreate(
+                source_a="CSUB University Handbook Appendix G",
+                source_b="RES 252644",
+                topic="WPAF evidence format",
+                description="The draft retains paper-era binder guidance that the supplied later resolution replaces with electronic organization.",
+            ),
+            origin="resolution",
+        )
         return ResolutionResponse(
             conflicts=[_finding(conflict.source_b, "WPAF Contents and Timelines", conflict.description)],
             recommendation="Replace the physical binder limit with organized, representative electronic evidence and confirm the resolution's effective metadata.",

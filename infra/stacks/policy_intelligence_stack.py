@@ -103,6 +103,7 @@ class PolicyIntelligenceStack(Stack):
 
         corpus_bucket = self._build_corpus_bucket()
         conflicts_table, uploads_table = self._build_dynamodb_tables()
+        app_memory_tables = self._import_app_memory_tables()
         user_pool, user_pool_client, user_pool_domain = self._build_cognito()
         collection, kb_role = self._build_opensearch_and_kb_role(corpus_bucket)
         vector_index_resource = self._build_vector_index_custom_resource(collection, region)
@@ -130,6 +131,7 @@ class PolicyIntelligenceStack(Stack):
             corpus_bucket=corpus_bucket,
             conflicts_table=conflicts_table,
             uploads_table=uploads_table,
+            app_memory_tables=app_memory_tables,
             knowledge_base=knowledge_base,
             data_source=data_source,
             user_pool=user_pool,
@@ -143,6 +145,7 @@ class PolicyIntelligenceStack(Stack):
             corpus_bucket=corpus_bucket,
             conflicts_table=conflicts_table,
             uploads_table=uploads_table,
+            app_memory_tables=app_memory_tables,
             knowledge_base=knowledge_base,
             data_source=data_source,
             user_pool=user_pool,
@@ -220,6 +223,26 @@ class PolicyIntelligenceStack(Stack):
         )
 
         return conflicts_table, uploads_table
+
+    def _import_app_memory_tables(self) -> dict[str, dynamodb.ITable]:
+        """Reference Yaza's separately provisioned application-memory tables.
+
+        The idempotent scripts under scripts/ own creation and verification of
+        these retained tables. Importing them keeps the existing AWS data in
+        place while allowing this stack to configure Lambda permissions and
+        environment variables without attempting to replace the tables.
+        """
+        names = {
+            "feedback": "policy-intelligence-feedback",
+            "recurring_questions": "policy-intelligence-recurring-questions",
+            "access_control": "policy-intelligence-access-control",
+            "source_registry": "policy-intelligence-source-registry",
+            "draft_versions": "policy-intelligence-draft-versions",
+        }
+        return {
+            key: dynamodb.Table.from_table_name(self, f"Imported{key.title().replace('_', '')}Table", name)
+            for key, name in names.items()
+        }
 
     # ------------------------------------------------------------------
     # Cognito
@@ -616,6 +639,7 @@ class PolicyIntelligenceStack(Stack):
         corpus_bucket: s3.Bucket,
         conflicts_table: dynamodb.Table,
         uploads_table: dynamodb.Table,
+        app_memory_tables: dict[str, dynamodb.ITable],
         knowledge_base: bedrock.CfnKnowledgeBase,
         data_source: bedrock.CfnDataSource,
         user_pool: cognito.UserPool,
@@ -670,6 +694,11 @@ class PolicyIntelligenceStack(Stack):
                 "BEDROCK_KB_ID": knowledge_base.attr_knowledge_base_id,
                 "DDB_CONFLICTS_TABLE": conflicts_table.table_name,
                 "DDB_UPLOADS_TABLE": uploads_table.table_name,
+                "DDB_FEEDBACK_TABLE": app_memory_tables["feedback"].table_name,
+                "DDB_RECURRING_QUESTIONS_TABLE": app_memory_tables["recurring_questions"].table_name,
+                "DDB_ACCESS_CONTROL_TABLE": app_memory_tables["access_control"].table_name,
+                "DDB_SOURCE_REGISTRY_TABLE": app_memory_tables["source_registry"].table_name,
+                "DDB_DRAFT_VERSIONS_TABLE": app_memory_tables["draft_versions"].table_name,
                 "CORPUS_BUCKET": corpus_bucket.bucket_name,
                 "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
                 "COGNITO_CLIENT_ID": user_pool_client.user_pool_client_id,
@@ -677,6 +706,8 @@ class PolicyIntelligenceStack(Stack):
         )
         conflicts_table.grant_read_write_data(fn)
         uploads_table.grant_read_write_data(fn)
+        for table in app_memory_tables.values():
+            table.grant_read_write_data(fn)
         corpus_bucket.grant_read_write(fn)
         fn.add_to_role_policy(
             iam.PolicyStatement(
@@ -802,6 +833,7 @@ class PolicyIntelligenceStack(Stack):
         corpus_bucket: s3.Bucket,
         conflicts_table: dynamodb.Table,
         uploads_table: dynamodb.Table,
+        app_memory_tables: dict[str, dynamodb.ITable],
         knowledge_base: bedrock.CfnKnowledgeBase,
         data_source: bedrock.CfnDataSource,
         user_pool: cognito.UserPool,
@@ -819,6 +851,11 @@ class PolicyIntelligenceStack(Stack):
         CfnOutput(self, "BedrockDataSourceId", value=data_source.attr_data_source_id)
         CfnOutput(self, "DdbConflictsTable", value=conflicts_table.table_name)
         CfnOutput(self, "DdbUploadsTable", value=uploads_table.table_name)
+        CfnOutput(self, "DdbFeedbackTable", value=app_memory_tables["feedback"].table_name)
+        CfnOutput(self, "DdbRecurringQuestionsTable", value=app_memory_tables["recurring_questions"].table_name)
+        CfnOutput(self, "DdbAccessControlTable", value=app_memory_tables["access_control"].table_name)
+        CfnOutput(self, "DdbSourceRegistryTable", value=app_memory_tables["source_registry"].table_name)
+        CfnOutput(self, "DdbDraftVersionsTable", value=app_memory_tables["draft_versions"].table_name)
         CfnOutput(self, "CognitoUserPoolId", value=user_pool.user_pool_id)
         CfnOutput(self, "CognitoClientId", value=user_pool_client.user_pool_client_id)
         CfnOutput(self, "CognitoHostedUiUrl", value=hosted_ui_url)
