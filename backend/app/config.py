@@ -6,7 +6,10 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DATA_ROOT = Path(os.getenv("POLICY_DATA_ROOT", REPO_ROOT / "data"))
+# Lambda's filesystem is read-only outside /tmp, and startup creates the data
+# directories unconditionally — so on Lambda the default must live under /tmp.
+_DEFAULT_DATA_ROOT = Path("/tmp/policy-data") if os.getenv("AWS_LAMBDA_FUNCTION_NAME") else REPO_ROOT / "data"
+DATA_ROOT = Path(os.getenv("POLICY_DATA_ROOT", _DEFAULT_DATA_ROOT))
 CORPUS_DIR = DATA_ROOT / "corpus"
 INDEX_DIR = DATA_ROOT / "index"
 DATABASE_PATH = Path(os.getenv("POLICY_DATABASE_PATH", DATA_ROOT / "app.db"))

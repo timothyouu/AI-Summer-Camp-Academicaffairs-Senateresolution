@@ -6,3 +6,4 @@
 2026-07-15T02:02:51-07:00 review round-2 fixes hit — auth header, Cognito callbacks, DDB S-keys, ingestion terminal status (22 pytest)
 2026-07-15T06:27:40-07:00 review round-3 fixes hit — reviewer-only mutations, ingestion job coalescing, DDB conditional update (26 pytest)
 2026-07-15T06:31:22-07:00 review round-4 fixes hit (inline) — agent-endpoint timeouts, DDB scan pagination (27 pytest)
+2026-07-15T06:35:18-07:00 review round-5 fixes hit — Lambda /tmp data root (inline), configured-API failure surfacing, bounded status polling

@@ -440,6 +440,7 @@ const sourceFromIngestion = (file: File, update: IngestionUpdate): KnowledgeSour
 });
 
 const mockUploadStartedAt = new Map<string, number>();
+const MAX_INGESTION_STATUS_FAILURES = 3;
 
 export async function requestPresignedUpload(file: File): Promise<PresignedUpload> {
   if (hasConfiguredApi) {
@@ -449,6 +450,7 @@ export async function requestPresignedUpload(file: File): Promise<PresignedUploa
       body: JSON.stringify({ filename: file.name, content_type: file.type || "application/octet-stream" }),
     });
     if (backend !== null) return { uploadId: backend.upload_id, uploadUrl: backend.upload_url, headers: backend.headers ?? {}, mock: false };
+    throw new Error("Unable to start the source upload. Please try again.");
   }
   const uploadId = `mock-upload-${Date.now()}`;
   mockUploadStartedAt.set(uploadId, Date.now());
@@ -468,6 +470,7 @@ export async function getIngestionStatus(uploadId: string): Promise<IngestionUpd
   if (hasConfiguredApi) {
     const backend = await backendRequest<BackendIngestionResponse>(`/api/uploads/${encodeURIComponent(uploadId)}`);
     if (backend !== null) return { uploadId: backend.upload_id, status: backend.status, chunksAdded: backend.chunks_added, error: backend.error };
+    throw new Error("Unable to check ingestion status.");
   }
   const elapsed = Date.now() - (mockUploadStartedAt.get(uploadId) ?? Date.now());
   const status: IngestionStatus = elapsed < 650 ? "pending" : elapsed < 2_250 ? "ingesting" : "ready";
@@ -475,8 +478,25 @@ export async function getIngestionStatus(uploadId: string): Promise<IngestionUpd
 }
 
 export async function pollIngestionStatus(uploadId: string, onUpdate: (update: IngestionUpdate) => void): Promise<IngestionUpdate> {
+  let consecutiveFailures = 0;
   while (true) {
-    const update = await getIngestionStatus(uploadId);
+    let update: IngestionUpdate;
+    try {
+      update = await getIngestionStatus(uploadId);
+      consecutiveFailures = 0;
+    } catch (reason) {
+      if (!hasConfiguredApi) throw reason;
+      consecutiveFailures += 1;
+      if (consecutiveFailures < MAX_INGESTION_STATUS_FAILURES) {
+        await delay(600);
+        continue;
+      }
+      update = {
+        uploadId,
+        status: "failed",
+        error: reason instanceof Error ? reason.message : "Unable to check ingestion status.",
+      };
+    }
     onUpdate(update);
     if (update.status === "ready" || update.status === "failed") return update;
     await delay(600);
