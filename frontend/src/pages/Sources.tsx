@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
+import { Link } from "react-router-dom";
 import {
   getRegistrySources,
   getSources,
@@ -168,6 +169,7 @@ export default function Sources() {
         <div>
           <h1 className="text-[40px] font-bold leading-tight tracking-tight">Knowledge sources</h1>
           <p className="mt-2 text-lg text-inkmuted">Manage the documents used to answer questions and review policy.</p>
+          <Link to="/catalog" className="mt-2 inline-block text-brand-blue hover:underline">Browse the full resource catalog →</Link>
         </div>
         <button type="button" onClick={() => fileInputRef.current?.click()} className="rounded-md bg-navy px-7 py-3 text-xl text-white shadow-sm hover:bg-brand-blue">Upload source</button>
       </div>

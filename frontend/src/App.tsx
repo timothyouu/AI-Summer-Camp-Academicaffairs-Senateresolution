@@ -4,6 +4,7 @@ import AppLayout from "./components/AppLayout";
 import type { Role } from "./data/mock";
 import ChatAnswer from "./pages/ChatAnswer";
 import Chats from "./pages/Chats";
+import Catalog from "./pages/Catalog";
 import ConflictLog from "./pages/ConflictLog";
 import ConflictReview from "./pages/ConflictReview";
 import Drafts from "./pages/Drafts";
@@ -91,6 +92,7 @@ function AppRoutes() {
       <Route path="/chats" element={<SharedRoute><Chats /></SharedRoute>} />
       <Route path="/chats/:conversationId" element={<SharedRoute><ChatAnswer /></SharedRoute>} />
       <Route path="/library" element={<SharedRoute><Library /></SharedRoute>} />
+      <Route path="/catalog" element={<SharedRoute><Catalog /></SharedRoute>} />
       <Route path="/topics" element={<SharedRoute><TopicList /></SharedRoute>} />
       <Route path="/topics/:slug" element={<SharedRoute><TopicDetail /></SharedRoute>} />
       <Route path="/reviews" element={<WorkspaceRoute role="reviewer"><ReviewOverview /></WorkspaceRoute>} />

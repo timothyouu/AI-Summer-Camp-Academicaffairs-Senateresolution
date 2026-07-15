@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { getTopics } from "../api";
 import type { Topic } from "../data/mock";
 
@@ -17,6 +17,7 @@ export default function TopicList() {
   return <section className="mx-auto max-w-[1168px] pt-2 text-navy">
     <h1 className="text-[42px] font-bold leading-tight tracking-[-0.025em]">Browse policy by topic</h1>
     <p className="mt-3 text-base text-inkmuted">Explore trusted guidance from the University Handbook, CBA, and PolicyStat.</p>
+    <Link to="/catalog" className="mt-2 inline-block text-brand-blue hover:underline">Browse the full resource catalog →</Link>
     <label className="mt-7 flex h-[62px] items-center gap-4 rounded-lg border border-navy/25 bg-white px-5 text-inkmuted"><SearchIcon /><span className="sr-only">Search topics or policy titles</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search topics or policy titles..." className="w-full bg-transparent text-base text-navy outline-none placeholder:text-inkmuted" /></label>
     <div className="mt-6">
       {error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-5 py-4 text-red-800">{error}</p>}

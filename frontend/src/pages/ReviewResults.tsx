@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { checkResolution, getReviewSubmission } from "../api";
+import { checkResolution, getReviewSubmission, saveReviewSubmission } from "../api";
 import AgentActivity from "../components/AgentActivity";
 import BackButton from "../components/BackButton";
+import DraftAssistant from "../components/DraftAssistant";
 import type { ReviewAnalysis, ReviewSubmission } from "../data/mock";
 
 function DocumentIcon() { return <svg className="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M6 2h8l4 4v16H6zM14 2v5h4M9 12h6M9 16h6"/></svg>; }
@@ -85,6 +86,20 @@ export default function ReviewResults() {
         </div>
         {analysis && <div className="mt-5 flex items-center gap-4 rounded-lg border border-gold/60 bg-amberbg px-4 py-3 text-sm"><span className="text-xl text-[#e9a800]">♧</span><span>{analysis.recommendation}</span></div>}
       </div>
+      {submission !== null && analysis !== null && (
+        <DraftAssistant draftText={submission.text} onAdoptRevision={(revisedText) => {
+          const next = { ...submission, text: revisedText };
+          saveReviewSubmission(next);
+          setSubmission(next);
+          setAnalysis(null);
+          setError("");
+          void checkResolution(revisedText)
+            .then(setAnalysis)
+            .catch((reason: unknown) => {
+              setError(reason instanceof Error ? reason.message : "Unable to analyze this draft.");
+            });
+        }} />
+      )}
       </>}
     </section>
   );
