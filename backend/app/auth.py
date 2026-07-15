@@ -81,6 +81,22 @@ def require_reviewer(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Reviewer role required")
 
 
+def require_authenticated(authorization: str | None = Header(default=None)) -> None:
+    """Require any verified Cognito user in AWS mode; a no-op locally.
+
+    The two long-running agent endpoints (POST /api/chat, POST
+    /api/check-resolution) are served in AWS mode through a Lambda Function
+    URL (auth_type=NONE) so they can run past API Gateway's 29s integration
+    cap. Because the Function URL bypasses the gateway's Cognito JWT
+    authorizer, the token is validated here in-app to keep the same
+    authentication guarantee. Locally Cognito is unconfigured, so this stays
+    a no-op and the demo endpoints remain open exactly as before.
+    """
+    settings = get_settings()
+    if settings.cognito_aws:
+        _verified_claims_from_authorization(authorization, settings)
+
+
 @router.post("/login", response_model=LoginResponse)
 def login(payload: LoginRequest, authorization: str | None = Header(default=None)) -> LoginResponse:
     settings = get_settings()

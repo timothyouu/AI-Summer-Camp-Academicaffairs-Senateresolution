@@ -121,12 +121,13 @@ class UploadRecord:
     status: str
     chunks_added: int
     ingestion_job_id: str | None = None
+    error: str | None = None
 
 
 class UploadStore(Protocol):
     def register(
         self, filename: str, status: str, chunks_added: int = 0, upload_id: str | None = None,
-        ingestion_job_id: str | None = None,
+        ingestion_job_id: str | None = None, error: str | None = None,
     ) -> str: ...
     def get(self, upload_id: str) -> UploadRecord | None: ...
 
@@ -134,20 +135,30 @@ class UploadStore(Protocol):
 class SQLiteUploadStore:
     def register(
         self, filename: str, status: str, chunks_added: int = 0, upload_id: str | None = None,
-        ingestion_job_id: str | None = None,
+        ingestion_job_id: str | None = None, error: str | None = None,
     ) -> str:
-        del ingestion_job_id
+        identifier = upload_id or filename
         with connection() as database:
-            database.execute("INSERT INTO uploads(filename,status,chunks_added) VALUES (?,?,?) ON CONFLICT(filename) DO UPDATE SET status=excluded.status,chunks_added=excluded.chunks_added",
-                             (filename, status, chunks_added))
-        return upload_id or filename
+            database.execute(
+                "INSERT INTO uploads(upload_id,filename,status,chunks_added,ingestion_job_id,error) VALUES (?,?,?,?,?,?) "
+                "ON CONFLICT(upload_id) DO UPDATE SET filename=excluded.filename,status=excluded.status,"
+                "chunks_added=excluded.chunks_added,ingestion_job_id=excluded.ingestion_job_id,error=excluded.error",
+                (identifier, filename, status, chunks_added, ingestion_job_id, error),
+            )
+        return identifier
 
     def get(self, upload_id: str) -> UploadRecord | None:
         with connection() as database:
-            row = database.execute("SELECT filename, status, chunks_added FROM uploads WHERE filename=?", (upload_id,)).fetchone()
+            row = database.execute(
+                "SELECT upload_id, filename, status, chunks_added, ingestion_job_id, error FROM uploads WHERE upload_id=?",
+                (upload_id,),
+            ).fetchone()
         if row is None:
             return None
-        return UploadRecord(upload_id=upload_id, filename=str(row["filename"]), status=str(row["status"]), chunks_added=int(row["chunks_added"]))
+        return UploadRecord(
+            upload_id=str(row["upload_id"]), filename=str(row["filename"]), status=str(row["status"]),
+            chunks_added=int(row["chunks_added"]), ingestion_job_id=row["ingestion_job_id"], error=row["error"],
+        )
 
 
 class DynamoDBUploadStore:
@@ -163,12 +174,13 @@ class DynamoDBUploadStore:
 
     def register(
         self, filename: str, status: str, chunks_added: int = 0, upload_id: str | None = None,
-        ingestion_job_id: str | None = None,
+        ingestion_job_id: str | None = None, error: str | None = None,
     ) -> str:
         identifier = upload_id or str(uuid4())
         self.client.put_item(TableName=self.table, Item=_ddb_encode({  # type: ignore[attr-defined]
             "id": identifier, "filename": filename, "status": status, "chunks_added": chunks_added,
             "ingestion_job_id": ingestion_job_id or "",
+            "error": error or "",
             "created_at": _now().isoformat(), "updated_at": _now().isoformat(),
         }))
         return identifier
@@ -183,6 +195,7 @@ class DynamoDBUploadStore:
             upload_id=str(values["id"]), filename=str(values["filename"]), status=str(values["status"]),
             chunks_added=int(values.get("chunks_added", 0)),
             ingestion_job_id=str(values["ingestion_job_id"]) if values.get("ingestion_job_id") else None,
+            error=str(values["error"]) if values.get("error") else None,
         )
 
 

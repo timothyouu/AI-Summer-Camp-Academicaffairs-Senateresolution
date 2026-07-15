@@ -132,6 +132,7 @@ class PolicyIntelligenceStack(Stack):
             user_pool_client=user_pool_client,
         )
         http_api = self._build_http_api(api_lambda=api_lambda, user_pool=user_pool, user_pool_client=user_pool_client)
+        agent_function_url = self._build_agent_function_url(api_lambda)
 
         self._build_outputs(
             region=region,
@@ -144,6 +145,7 @@ class PolicyIntelligenceStack(Stack):
             user_pool_client=user_pool_client,
             user_pool_domain=user_pool_domain,
             http_api=http_api,
+            agent_function_url=agent_function_url,
         )
 
     # ------------------------------------------------------------------
@@ -633,7 +635,13 @@ class PolicyIntelligenceStack(Stack):
                     ],
                 ),
             ),
-            timeout=Duration.seconds(29),  # API Gateway HTTP API hard limit is 30s
+            # 120s matches the frontend's AGENT_REQUEST_TIMEOUT_MS. Requests
+            # routed through the HTTP API are still cut by the gateway's own
+            # ~29s integration cap (fine — those routes are fast), but the two
+            # long-running agent endpoints are served via the Lambda Function
+            # URL below (no 29s cap), so the function itself must be allowed to
+            # run past 29s. Function URLs support up to the 15-min Lambda max.
+            timeout=Duration.seconds(120),
             memory_size=512,
             log_retention=logs.RetentionDays.ONE_WEEK,
             environment={
@@ -736,6 +744,36 @@ class PolicyIntelligenceStack(Stack):
         return http_api
 
     # ------------------------------------------------------------------
+    # Lambda Function URL (escapes API Gateway's 29s cap for agent endpoints)
+    # ------------------------------------------------------------------
+    def _build_agent_function_url(self, api_lambda: _lambda.Function) -> _lambda.FunctionUrl:
+        """A Function URL on the SAME API Lambda for the two long-running agent
+        endpoints (POST /api/chat, POST /api/check-resolution).
+
+        API Gateway HTTP API has a hard ~29s integration timeout; the retrieval
+        + multi-agent Bedrock pipeline can exceed it. Function URLs allow up to
+        the 15-min Lambda max (the function's own timeout is 120s here), so the
+        frontend routes just those two POSTs here via VITE_AGENT_BASE_URL while
+        every other route keeps flowing through the gateway + JWT authorizer.
+
+        auth_type is NONE because Function URLs cannot use the Cognito JWT
+        authorizer; the backend validates the Cognito token itself in-app
+        (backend/app/auth.py require_authenticated / require_reviewer), so these
+        endpoints stay authenticated in AWS mode. CORS is scoped to the same
+        origins as the HTTP API so the browser can call it cross-origin.
+        """
+        return api_lambda.add_function_url(
+            auth_type=_lambda.FunctionUrlAuthType.NONE,
+            cors=_lambda.FunctionUrlCorsOptions(
+                allowed_origins=self._allowed_origins(),
+                allowed_methods=[_lambda.HttpMethod.POST],
+                allowed_headers=["Authorization", "Content-Type"],
+                allow_credentials=True,
+                max_age=Duration.hours(1),
+            ),
+        )
+
+    # ------------------------------------------------------------------
     # Outputs
     # ------------------------------------------------------------------
     def _build_outputs(
@@ -751,6 +789,7 @@ class PolicyIntelligenceStack(Stack):
         user_pool_client: cognito.UserPoolClient,
         user_pool_domain: cognito.UserPoolDomain,
         http_api: apigwv2.HttpApi,
+        agent_function_url: _lambda.FunctionUrl,
     ) -> None:
         hosted_ui_url = (
             f"https://{user_pool_domain.domain_name}.auth.{region}.amazoncognito.com"
@@ -765,6 +804,9 @@ class PolicyIntelligenceStack(Stack):
         CfnOutput(self, "CognitoClientId", value=user_pool_client.user_pool_client_id)
         CfnOutput(self, "CognitoHostedUiUrl", value=hosted_ui_url)
         CfnOutput(self, "ApiUrl", value=http_api.api_endpoint)
+        # Feed into the frontend's VITE_AGENT_BASE_URL so chat / check-resolution
+        # bypass the HTTP API's 29s cap. Trailing slash trimmed by the frontend.
+        CfnOutput(self, "AgentFunctionUrl", value=agent_function_url.url)
 
     # ------------------------------------------------------------------
     def _allowed_origins(self) -> list[str]:

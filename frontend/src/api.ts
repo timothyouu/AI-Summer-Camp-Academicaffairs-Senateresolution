@@ -35,6 +35,12 @@ const manualConflictsStorageKey = "policy-intelligence.manual-conflicts-v1";
 const uploadedSourcesStorageKey = "policy-intelligence.uploaded-sources-v1";
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "");
 const hasConfiguredApi = Boolean(import.meta.env.VITE_API_BASE_URL);
+// The two long-running agent endpoints (chat, check-resolution) run retrieval
+// plus a multi-agent Bedrock pipeline that can exceed API Gateway HTTP API's
+// hard 29s integration cap. In AWS mode they are served by a Lambda Function
+// URL (up to 15 min) supplied here; unset, they fall back to the normal API
+// base so local/dev behavior is byte-for-byte unchanged.
+const agentBaseUrl = (import.meta.env.VITE_AGENT_BASE_URL ?? "").replace(/\/$/, "") || apiBaseUrl;
 
 interface BackendCitation { id: number; source: string; section: string; excerpt: string; }
 interface BackendChatResponse {
@@ -82,14 +88,14 @@ interface BackendTopicDetail { name: string; chunks: Array<{ source: string; sec
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const AGENT_REQUEST_TIMEOUT_MS = 120_000;
 
-const backendRequest = async <T>(path: string, init?: RequestInit, timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS): Promise<T | null> => {
+const backendRequest = async <T>(path: string, init?: RequestInit, timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS, baseUrl: string = apiBaseUrl): Promise<T | null> => {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const authorizationToken = await getCognitoAuthorizationToken();
     const headers = new Headers(init?.headers);
     if (authorizationToken !== null) headers.set("Authorization", `Bearer ${authorizationToken}`);
-    const response = await fetch(`${apiBaseUrl}${path}`, { ...init, headers, signal: controller.signal });
+    const response = await fetch(`${baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     if (!response.ok) return null;
     return await response.json() as T;
   } catch (error) {
@@ -217,7 +223,7 @@ export async function askQuestion(text: string): Promise<Answer> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question }),
-  }, AGENT_REQUEST_TIMEOUT_MS);
+  }, AGENT_REQUEST_TIMEOUT_MS, agentBaseUrl);
   if (backend !== null) {
     const paragraphs = backend.answer.split(/\n\s*\n/).filter(Boolean);
     return {
@@ -538,7 +544,7 @@ export async function checkResolution(text: string): Promise<ReviewAnalysis> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
-  }, AGENT_REQUEST_TIMEOUT_MS);
+  }, AGENT_REQUEST_TIMEOUT_MS, agentBaseUrl);
   if (backend !== null) {
     const findings = [
       ...backend.overlaps.map((finding) => ({ type: "Overlap" as const, source: `${finding.source} • ${finding.section}` })),

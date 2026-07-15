@@ -54,7 +54,7 @@ def test_cognito_employee_cannot_use_reviewer_workflows(
     assert response.json() == {"detail": "Reviewer role required"}
 
 
-def test_ingestion_reuses_active_job_after_concurrent_job_conflict(monkeypatch: Any) -> None:
+def test_ingestion_conflict_leaves_uploads_pending_without_job(monkeypatch: Any) -> None:
     class ConcurrentJobError(Exception):
         response = {"Error": {"Code": "ConflictException", "Message": "A concurrent ingestion job is already running"}}
 
@@ -85,10 +85,6 @@ def test_ingestion_reuses_active_job_after_concurrent_job_conflict(monkeypatch: 
             assert kwargs == {"knowledgeBaseId": "kb-123", "dataSourceId": "source-123"}
             raise ConcurrentJobError()
 
-        def list_ingestion_jobs(self, **kwargs: object) -> dict[str, object]:
-            assert kwargs == {"knowledgeBaseId": "kb-123", "dataSourceId": "source-123", "maxResults": 100}
-            return {"ingestionJobSummaries": [{"ingestionJobId": "active-job", "status": "IN_PROGRESS"}]}
-
     store = Store()
     bedrock = BedrockClient()
     monkeypatch.setenv("AWS_REGION", "us-west-2")
@@ -98,16 +94,48 @@ def test_ingestion_reuses_active_job_after_concurrent_job_conflict(monkeypatch: 
     monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *_args, **_kwargs: bedrock))
 
     response = ingestion.handler({"Records": [
-        {"s3": {"object": {"key": "uploads%2Fhandbook.pdf"}}},
-        {"s3": {"object": {"key": "uploads%2Fpolicy.md"}}},
+        {"s3": {"object": {"key": "uploads%2Fupload-1%2Fhandbook.pdf"}}},
+        {"s3": {"object": {"key": "uploads%2Fupload-2%2Fpolicy.md"}}},
     ]}, object())
 
     assert response == {"processed": 2}
     assert bedrock.start_calls == 1
     assert store.calls == [
-        {"filename": "handbook.pdf", "status": "ingesting", "chunks_added": 0, "upload_id": "handbook.pdf", "ingestion_job_id": "active-job"},
-        {"filename": "policy.md", "status": "ingesting", "chunks_added": 0, "upload_id": "policy.md", "ingestion_job_id": "active-job"},
+        {"filename": "handbook.pdf", "status": "pending", "chunks_added": 0, "upload_id": "upload-1", "ingestion_job_id": None},
+        {"filename": "policy.md", "status": "pending", "chunks_added": 0, "upload_id": "upload-2", "ingestion_job_id": None},
     ]
+
+
+def test_ingestion_maps_upload_id_and_filename_from_s3_key(monkeypatch: Any) -> None:
+    class Store:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def register(self, filename: str, status: str, chunks_added: int = 0, upload_id: str | None = None,
+                     ingestion_job_id: str | None = None, error: str | None = None) -> str:
+            self.calls.append({"filename": filename, "upload_id": upload_id, "job_id": ingestion_job_id})
+            return upload_id or filename
+
+    class BedrockClient:
+        def list_data_sources(self, **_kwargs: object) -> dict[str, object]:
+            return {"dataSourceSummaries": [{"dataSourceId": "source-123"}]}
+
+        def start_ingestion_job(self, **_kwargs: object) -> dict[str, object]:
+            return {"ingestionJob": {"ingestionJobId": "job-123"}}
+
+    store = Store()
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    monkeypatch.setenv("BEDROCK_KB_ID", "kb-123")
+    monkeypatch.setenv("DDB_UPLOADS_TABLE", "Uploads")
+    monkeypatch.setattr(ingestion, "upload_store", lambda: store)
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *_args, **_kwargs: BedrockClient()))
+
+    result = ingestion.handler({"Records": [{"s3": {"object": {
+        "key": "uploads%2F4f38dd5d-abc%2FFaculty+Handbook.pdf",
+    }}}]}, object())
+
+    assert result == {"processed": 1}
+    assert store.calls == [{"filename": "Faculty Handbook.pdf", "upload_id": "4f38dd5d-abc", "job_id": "job-123"}]
 
 
 def test_conditional_conflict_update_failure_becomes_api_not_found(monkeypatch: Any) -> None:

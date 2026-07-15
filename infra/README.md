@@ -198,6 +198,22 @@ Lambda roles, etc.) — approve them.
 | `CognitoClientId` | `COGNITO_CLIENT_ID` | SPA app client, no secret |
 | `CognitoHostedUiUrl` | `VITE_COGNITO_HOSTED_UI_URL` (frontend) | hosted UI domain for the `VITE_USE_COGNITO` flow (LOOP.md decision 5) |
 | `ApiUrl` | `VITE_API_BASE_URL` (frontend) | API Gateway HTTP API invoke URL |
+| `AgentFunctionUrl` | `VITE_AGENT_BASE_URL` (frontend) | Lambda Function URL for the two long-running agent endpoints (`POST /api/chat`, `POST /api/check-resolution`) — see note below |
+
+### Agent endpoints and the 29s cap
+
+API Gateway HTTP API has a hard ~29s integration timeout. The chat and
+check-resolution endpoints run retrieval plus the multi-agent Bedrock pipeline,
+which can exceed it, so the stack adds a **Lambda Function URL on the same API
+Lambda** (`_build_agent_function_url`) with `auth_type=NONE` and CORS scoped to
+the frontend origins. Function URLs allow up to the 15-min Lambda max, and the
+API Lambda's own timeout was raised from 29s to 120s (matching the frontend's
+`AGENT_REQUEST_TIMEOUT_MS`) so the function can actually run past 29s. The
+frontend sends only those two POSTs to `VITE_AGENT_BASE_URL`; everything else
+still flows through the HTTP API and its Cognito JWT authorizer. Because the
+Function URL bypasses that authorizer, the two endpoints validate the Cognito
+token in-app (`backend/app/auth.py` `require_authenticated` / `require_reviewer`),
+so they stay authenticated in AWS mode.
 
 Get all outputs after deploy with:
 
@@ -283,6 +299,12 @@ cdk destroy
   -t /asset-output && cp -au . /asset-output"]))` pattern (core
   `aws_cdk.BundlingOptions`, container reads `/asset-input` cwd, writes
   `/asset-output`).
+
+- `aws_cdk.aws_lambda.FunctionUrl` / `FunctionUrlCorsOptions` docs — confirmed
+  `Function.add_function_url(auth_type=FunctionUrlAuthType.NONE, cors=...)`
+  and the `FunctionUrlCorsOptions(allowed_origins, allowed_methods=[HttpMethod
+  .POST], allowed_headers, allow_credentials, max_age)` shape are in stable
+  `aws-cdk-lib.aws_lambda`; `.url` is the resulting invoke URL.
 
 None of this was confirmed by an actual `cdk synth` — see the top of this
 file. Run `cdk synth` yourself as the first real check once dependencies are

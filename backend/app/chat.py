@@ -3,9 +3,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from .agents import GroundedPassage, create_pipeline
+from .auth import require_authenticated
 from .conflicts import create_or_get_conflict
 from .models import ChatRequest, ChatResponse, Citation, ConflictCreate, ConflictSignal
 from .retrieval import SearchResult, search
@@ -115,7 +116,7 @@ def _local_index_answer(results: list[SearchResult]) -> ChatResponse:
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(payload: ChatRequest) -> ChatResponse:
+def chat(payload: ChatRequest, _: None = Depends(require_authenticated)) -> ChatResponse:
     fixture = _calibrated(payload.question)
     if fixture is None:
         return _local_index_answer(search(payload.question, k=6))

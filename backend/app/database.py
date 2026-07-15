@@ -22,9 +22,12 @@ CREATE TABLE IF NOT EXISTS conflicts (
 );
 CREATE TABLE IF NOT EXISTS uploads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    filename TEXT NOT NULL UNIQUE,
+    upload_id TEXT NOT NULL UNIQUE,
+    filename TEXT NOT NULL,
     status TEXT NOT NULL,
     chunks_added INTEGER NOT NULL,
+    ingestion_job_id TEXT,
+    error TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -45,3 +48,21 @@ def connection() -> Iterator[sqlite3.Connection]:
 def initialize_database() -> None:
     with connection() as database:
         database.executescript(SCHEMA)
+        columns = {str(row["name"]) for row in database.execute("PRAGMA table_info(uploads)").fetchall()}
+        if "upload_id" not in columns:
+            database.executescript("""
+                ALTER TABLE uploads RENAME TO uploads_legacy;
+                CREATE TABLE uploads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    upload_id TEXT NOT NULL UNIQUE,
+                    filename TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    chunks_added INTEGER NOT NULL,
+                    ingestion_job_id TEXT,
+                    error TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                INSERT INTO uploads(upload_id, filename, status, chunks_added, created_at)
+                SELECT filename, filename, status, chunks_added, created_at FROM uploads_legacy;
+                DROP TABLE uploads_legacy;
+            """)

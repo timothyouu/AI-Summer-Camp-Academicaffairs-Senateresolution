@@ -14,11 +14,8 @@ def handler(event: dict[str, Any], context: object) -> dict[str, int]:
         raise RuntimeError("AWS_REGION and BEDROCK_KB_ID are required")
     import boto3  # type: ignore[import-not-found]
     bedrock: Any = boto3.client("bedrock-agent", region_name=settings.aws_region)
-    filenames = [
-        unquote_plus(str(record["s3"]["object"]["key"])).rsplit("/", 1)[-1]
-        for record in event.get("Records", [])
-    ]
-    if not filenames:
+    uploads = [_upload_from_key(str(record["s3"]["object"]["key"])) for record in event.get("Records", [])]
+    if not uploads:
         return {"processed": 0}
     store = upload_store()
     data_source_id = _data_source_id(bedrock, str(settings.bedrock_kb_id))
@@ -31,13 +28,22 @@ def handler(event: dict[str, Any], context: object) -> dict[str, int]:
             raise RuntimeError("Bedrock did not return an ingestion job ID")
     except Exception as error:
         if not _is_concurrent_ingestion_error(error):
-            for filename in filenames:
-                store.register(filename, "failed", upload_id=filename)
+            for upload_id, filename in uploads:
+                store.register(filename, "failed", upload_id=upload_id, error=str(error) or error.__class__.__name__)
             raise
-        job_id = _active_ingestion_job_id(bedrock, str(settings.bedrock_kb_id), data_source_id)
-    for filename in filenames:
-        store.register(filename, "ingesting", upload_id=filename, ingestion_job_id=job_id)
-    return {"processed": len(filenames)}
+        for upload_id, filename in uploads:
+            store.register(filename, "pending", upload_id=upload_id)
+        return {"processed": len(uploads)}
+    for upload_id, filename in uploads:
+        store.register(filename, "ingesting", upload_id=upload_id, ingestion_job_id=job_id)
+    return {"processed": len(uploads)}
+
+
+def _upload_from_key(encoded_key: str) -> tuple[str, str]:
+    parts = unquote_plus(encoded_key).split("/")
+    if len(parts) < 3 or parts[0] != "uploads" or not parts[1] or not parts[-1]:
+        raise ValueError("S3 upload key must have the form uploads/{upload_id}/{filename}")
+    return parts[1], parts[-1]
 
 
 def _data_source_id(client: Any, knowledge_base_id: str) -> str:
@@ -60,16 +66,3 @@ def _is_concurrent_ingestion_error(error: Exception) -> bool:
         "another ingestion job" in message,
     )
     return code in {"ConflictException", "ValidationException"} and any(concurrent_job_markers)
-
-
-def _active_ingestion_job_id(client: Any, knowledge_base_id: str, data_source_id: str) -> str:
-    response: dict[str, Any] = client.list_ingestion_jobs(
-        knowledgeBaseId=knowledge_base_id, dataSourceId=data_source_id, maxResults=100,
-    )
-    summaries = response.get("ingestionJobSummaries", [])
-    for summary in summaries:
-        if str(summary.get("status", "")) in {"STARTING", "IN_PROGRESS"}:
-            job_id = str(summary.get("ingestionJobId", ""))
-            if job_id:
-                return job_id
-    raise RuntimeError("Bedrock reported a concurrent ingestion job but no active job was found")

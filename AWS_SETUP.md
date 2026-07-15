@@ -69,9 +69,21 @@ keep the local path. Values come from the `cdk deploy` stack outputs
 ## 5. Frontend env vars
 
 Template: `frontend/.env.example`. Set `VITE_API_BASE_URL` to the `ApiUrl`
-output; for real sign-in set `VITE_USE_COGNITO=true` plus
+output; set `VITE_AGENT_BASE_URL` to the `AgentFunctionUrl` output (see the
+note below); for real sign-in set `VITE_USE_COGNITO=true` plus
 `VITE_COGNITO_DOMAIN`, `VITE_COGNITO_CLIENT_ID`, `VITE_REDIRECT_URI`
 (hosted UI values from the stack outputs). Unset ⇒ demo login unchanged.
+
+`VITE_AGENT_BASE_URL` (Lambda Function URL from the `AgentFunctionUrl` output)
+is where the two long-running agent endpoints — `POST /api/chat` and
+`POST /api/check-resolution` — are sent. API Gateway HTTP API has a hard ~29s
+integration cap, and the retrieval + multi-agent Bedrock pipeline can exceed
+it; the Function URL allows up to the 15-min Lambda max (the function timeout is
+120s). Those two endpoints validate the Cognito JWT in-app (the Function URL
+uses `auth_type=NONE`, so it bypasses the gateway authorizer), so they stay
+authenticated. If `VITE_AGENT_BASE_URL` is unset, both calls fall back to
+`VITE_API_BASE_URL` — fine locally, but under a real HTTP API a slow pipeline
+would 5xx at ~29s, so set it for the AWS demo.
 
 Hosting: connect the repo (`prod` branch, `frontend/` app root) to Amplify
 Hosting and set the same env vars in the Amplify console.
