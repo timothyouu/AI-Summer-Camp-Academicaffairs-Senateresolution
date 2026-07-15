@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
@@ -10,7 +11,7 @@ from .config import UPLOAD_DIR, ensure_data_directories, get_settings
 from .ingest import append_to_index
 from .models import IngestionResponse, PresignedUploadRequest, PresignedUploadResponse, UploadResponse
 from .retrieval import reload_index
-from .stores import upload_store
+from .stores import UploadRecord, UploadStore, upload_store
 
 
 router = APIRouter(prefix="/api", tags=["uploads"])
@@ -97,9 +98,49 @@ async def presign_upload(payload: PresignedUploadRequest, request: Request) -> P
 
 @router.get("/uploads/{upload_id}", response_model=IngestionResponse, response_model_exclude_none=True)
 async def ingestion_status(upload_id: str) -> IngestionResponse:
-    record = upload_store().get(upload_id)
+    store = upload_store()
+    record = store.get(upload_id)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload not found")
+    settings = get_settings()
+    if settings.uploads_aws and record.status == "ingesting" and record.ingestion_job_id:
+        record = _refresh_aws_ingestion_status(store, record, settings.bedrock_kb_id, settings.aws_region)
     if record.status not in INGESTION_STATUSES:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Upload has an invalid ingestion status")
     return IngestionResponse(upload_id=record.upload_id, status=record.status, chunks_added=record.chunks_added)
+
+
+def _refresh_aws_ingestion_status(
+    store: UploadStore, record: UploadRecord, knowledge_base_id: str | None, region: str | None,
+) -> UploadRecord:
+    """Poll Bedrock once and persist the terminal upload status when available."""
+    if not knowledge_base_id:
+        return record
+    import boto3  # type: ignore[import-not-found]
+    client: Any = boto3.client("bedrock-agent", region_name=region)
+    data_source_id = _data_source_id(client, knowledge_base_id)
+    response: dict[str, Any] = client.get_ingestion_job(
+        knowledgeBaseId=knowledge_base_id,
+        dataSourceId=data_source_id,
+        ingestionJobId=record.ingestion_job_id,
+    )
+    bedrock_status = str(response.get("ingestionJob", {}).get("status", ""))
+    mapped_status = {"COMPLETE": "ready", "FAILED": "failed"}.get(bedrock_status, "ingesting")
+    if mapped_status != "ingesting":
+        store.register(
+            record.filename, mapped_status, record.chunks_added,
+            upload_id=record.upload_id, ingestion_job_id=record.ingestion_job_id,
+        )
+        return UploadRecord(
+            upload_id=record.upload_id, filename=record.filename, status=mapped_status,
+            chunks_added=record.chunks_added, ingestion_job_id=record.ingestion_job_id,
+        )
+    return record
+
+
+def _data_source_id(client: Any, knowledge_base_id: str) -> str:
+    response: dict[str, Any] = client.list_data_sources(knowledgeBaseId=knowledge_base_id, maxResults=10)
+    sources = response.get("dataSourceSummaries", [])
+    if not sources:
+        raise RuntimeError("Knowledge Base has no data source")
+    return str(sources[0]["dataSourceId"])

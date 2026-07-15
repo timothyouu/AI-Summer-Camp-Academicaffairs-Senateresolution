@@ -75,17 +75,21 @@ class DynamoDBConflictStore:
     def create_or_get(self, payload: ConflictCreate) -> ConflictRecord:
         identity = "\x1f".join((payload.source_a, payload.source_b, payload.topic, payload.description))
         conflict_id = int.from_bytes(hashlib.sha256(identity.encode()).digest()[:4], "big") & 0x7FFF_FFFF
-        existing = self.client.get_item(TableName=self.table, Key={"id": {"N": str(conflict_id)}}).get("Item")  # type: ignore[attr-defined]
+        existing = self.client.get_item(TableName=self.table, Key=_ddb_conflict_key(conflict_id)).get("Item")  # type: ignore[attr-defined]
         if existing:
             return _conflict(_ddb_decode(existing))
         now = _now().isoformat()
         values: dict[str, object] = {"id": conflict_id, **payload.model_dump(), "resolution_note": "", "created_at": now, "updated_at": now}
-        self.client.put_item(TableName=self.table, Item=_ddb_encode(values), ConditionExpression="attribute_not_exists(id)")  # type: ignore[attr-defined]
+        self.client.put_item(  # type: ignore[attr-defined]
+            TableName=self.table,
+            Item=_ddb_encode({**values, "id": str(conflict_id)}),
+            ConditionExpression="attribute_not_exists(id)",
+        )
         return _conflict(values)
 
     def update(self, conflict_id: int, payload: ConflictUpdate) -> ConflictRecord | None:
         response = self.client.update_item(  # type: ignore[attr-defined]
-            TableName=self.table, Key={"id": {"N": str(conflict_id)}},
+            TableName=self.table, Key=_ddb_conflict_key(conflict_id),
             UpdateExpression="SET #status=:status, resolution_note=:note, updated_at=:updated",
             ExpressionAttributeNames={"#status": "status"},
             ExpressionAttributeValues={":status": {"S": payload.status}, ":note": {"S": payload.resolution_note.strip()}, ":updated": {"S": _now().isoformat()}},
@@ -101,15 +105,23 @@ class UploadRecord:
     filename: str
     status: str
     chunks_added: int
+    ingestion_job_id: str | None = None
 
 
 class UploadStore(Protocol):
-    def register(self, filename: str, status: str, chunks_added: int = 0, upload_id: str | None = None) -> str: ...
+    def register(
+        self, filename: str, status: str, chunks_added: int = 0, upload_id: str | None = None,
+        ingestion_job_id: str | None = None,
+    ) -> str: ...
     def get(self, upload_id: str) -> UploadRecord | None: ...
 
 
 class SQLiteUploadStore:
-    def register(self, filename: str, status: str, chunks_added: int = 0, upload_id: str | None = None) -> str:
+    def register(
+        self, filename: str, status: str, chunks_added: int = 0, upload_id: str | None = None,
+        ingestion_job_id: str | None = None,
+    ) -> str:
+        del ingestion_job_id
         with connection() as database:
             database.execute("INSERT INTO uploads(filename,status,chunks_added) VALUES (?,?,?) ON CONFLICT(filename) DO UPDATE SET status=excluded.status,chunks_added=excluded.chunks_added",
                              (filename, status, chunks_added))
@@ -134,10 +146,14 @@ class DynamoDBUploadStore:
         self.client = client
         self.table = settings.ddb_uploads_table
 
-    def register(self, filename: str, status: str, chunks_added: int = 0, upload_id: str | None = None) -> str:
+    def register(
+        self, filename: str, status: str, chunks_added: int = 0, upload_id: str | None = None,
+        ingestion_job_id: str | None = None,
+    ) -> str:
         identifier = upload_id or str(uuid4())
         self.client.put_item(TableName=self.table, Item=_ddb_encode({  # type: ignore[attr-defined]
             "id": identifier, "filename": filename, "status": status, "chunks_added": chunks_added,
+            "ingestion_job_id": ingestion_job_id or "",
             "created_at": _now().isoformat(), "updated_at": _now().isoformat(),
         }))
         return identifier
@@ -151,6 +167,7 @@ class DynamoDBUploadStore:
         return UploadRecord(
             upload_id=str(values["id"]), filename=str(values["filename"]), status=str(values["status"]),
             chunks_added=int(values.get("chunks_added", 0)),
+            ingestion_job_id=str(values["ingestion_job_id"]) if values.get("ingestion_job_id") else None,
         )
 
 
@@ -167,6 +184,11 @@ def _ddb_encode(values: dict[str, object]) -> dict[str, dict[str, str]]:
     for key, value in values.items():
         encoded[key] = {"N": str(value)} if isinstance(value, (int, float)) else {"S": str(value)}
     return encoded
+
+
+def _ddb_conflict_key(conflict_id: int) -> dict[str, dict[str, str]]:
+    """Encode the string DynamoDB partition key while preserving integer API IDs."""
+    return {"id": {"S": str(conflict_id)}}
 
 
 def _ddb_decode(item: dict[str, dict[str, str]]) -> dict[str, object]:

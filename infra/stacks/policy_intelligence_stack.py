@@ -24,9 +24,9 @@ DDB_CONFLICTS_TABLE, DDB_UPLOADS_TABLE, CORPUS_BUCKET,
 COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID) — AWS_REGION is deliberately not
 set since it's a reserved Lambda runtime env var. This worktree owns
 `infra/` only; backend/app/lambda_entry.py and
-backend/lambda_handlers/ingestion.py are Phase B code owned elsewhere —
-see infra/README.md "Packaging note" for the asset-bundling gap (source is
-packaged as-is, dependencies are not yet pip-bundled into the asset).
+backend/lambda_handlers/ingestion.py are Phase B code owned elsewhere.
+Dependencies are pip-bundled into each asset via BundlingOptions (Docker
+required at synth time) — see infra/README.md "Packaging note".
 """
 from __future__ import annotations
 
@@ -251,10 +251,15 @@ class PolicyIntelligenceStack(Stack):
             o_auth=cognito.OAuthSettings(
                 flows=cognito.OAuthFlows(authorization_code_grant=True),
                 scopes=[cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
-                # Placeholder callback/logout URLs — update post-deploy once the
-                # Amplify Hosting domain is known (see README "Post-deploy").
-                callback_urls=["http://localhost:5173/", "http://localhost:5174/"],
-                logout_urls=["http://localhost:5173/", "http://localhost:5174/"],
+                # Cognito requires an EXACT match on redirect_uri. The
+                # frontend's PKCE flow (frontend/src/auth/cognito.ts) sends
+                # VITE_REDIRECT_URI, documented in frontend/.env.example as
+                # http://localhost:5173/auth/callback — so /auth/callback is
+                # registered for both localhost dev ports plus the deployed
+                # frontend origin from the same `frontendOrigin` CDK context
+                # value used for CORS (`cdk deploy -c frontendOrigin=...`).
+                callback_urls=self._callback_urls(),
+                logout_urls=self._logout_urls(),
             ),
             supported_identity_providers=[cognito.UserPoolClientIdentityProvider.COGNITO],
         )
@@ -743,13 +748,27 @@ class PolicyIntelligenceStack(Stack):
 
         HTTP API CORS origins are literal strings (no wildcards below the
         scheme), so the real Amplify/hosting URL has to be supplied once it
-        is known — see infra/README.md "CORS: pass the frontend origin".
+        is known — see infra/README.md "CORS and Cognito redirects: pass the frontend origin at deploy time".
         """
         origins = ["http://localhost:5173", "http://localhost:5174"]
         frontend_origin = self.node.try_get_context("frontendOrigin")
         if isinstance(frontend_origin, str) and frontend_origin:
             origins.append(frontend_origin.rstrip("/"))
         return origins
+
+    def _callback_urls(self) -> list[str]:
+        """Cognito OAuth callback URLs — exact-match against the frontend's
+        redirect_uri, which is `<origin>/auth/callback` (see
+        frontend/.env.example VITE_REDIRECT_URI and
+        frontend/src/auth/cognito.ts). Derived from the same origins as CORS
+        so `-c frontendOrigin=...` fixes both in one flag.
+        """
+        return [f"{origin}/auth/callback" for origin in self._allowed_origins()]
+
+    def _logout_urls(self) -> list[str]:
+        """Cognito allowed sign-out URLs — the site roots (the SPA lands on
+        its login page after logout, not the callback route)."""
+        return [f"{origin}/" for origin in self._allowed_origins()]
 
     @staticmethod
     def _to_json(value: object) -> str:

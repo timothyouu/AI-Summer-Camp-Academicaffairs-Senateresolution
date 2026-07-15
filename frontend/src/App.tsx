@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import AppLayout from "./components/AppLayout";
 import type { Role } from "./data/mock";
 import ChatAnswer from "./pages/ChatAnswer";
@@ -16,6 +16,7 @@ import Sources from "./pages/Sources";
 import TopicDetail from "./pages/TopicDetail";
 import TopicList from "./pages/TopicList";
 import { RoleProvider, useRole } from "./state/role";
+import { cognitoSessionExpiredEvent } from "./auth/cognito";
 
 /** Renders under whatever role is currently active (does not force one). Used for routes shared by both roles. */
 function SharedRoute({ children }: { children: ReactNode }) {
@@ -55,5 +56,17 @@ function AppRoutes() {
 }
 
 export default function App() {
-  return <RoleProvider><AppRoutes /></RoleProvider>;
+  return <RoleProvider><CognitoSessionRedirect /><AppRoutes /></RoleProvider>;
+}
+
+function CognitoSessionRedirect() {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const redirectToLogin = () => navigate("/login", { replace: true });
+    window.addEventListener(cognitoSessionExpiredEvent, redirectToLogin);
+    return () => window.removeEventListener(cognitoSessionExpiredEvent, redirectToLogin);
+  }, [navigate]);
+
+  return null;
 }

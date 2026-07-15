@@ -66,14 +66,28 @@ On WSL2, make sure Docker Desktop (or a native dockerd) is running before
 synths hit the CDK asset cache unless backend source or requirements
 change.
 
-## CORS: pass the frontend origin at deploy time
+## CORS and Cognito redirects: pass the frontend origin at deploy time
 
-API Gateway HTTP APIs treat every CORS `allow_origins` entry as a
-**literal string** — a wildcard like `https://*.amplifyapp.com` never
-matches anything, so it is not used here. The stack always allows the two
-localhost dev origins (`http://localhost:5173`, `:5174`) and adds one
-deployed-frontend origin from CDK context. Once the Amplify (or other
-hosting) URL exists, deploy with:
+One CDK context value, `frontendOrigin`, drives two things that both need
+the deployed frontend's exact URL:
+
+1. **API CORS.** API Gateway HTTP APIs treat every CORS `allow_origins`
+   entry as a **literal string** — a wildcard like
+   `https://*.amplifyapp.com` never matches anything, so it is not used
+   here. The stack always allows the two localhost dev origins
+   (`http://localhost:5173`, `:5174`) and adds `frontendOrigin` when set.
+2. **Cognito app client redirect URLs.** Cognito requires an exact match
+   on `redirect_uri`. The frontend's PKCE flow
+   (`frontend/src/auth/cognito.ts`) sends `VITE_REDIRECT_URI`, which
+   `frontend/.env.example` documents as
+   `http://localhost:5173/auth/callback` — so the stack registers
+   `<origin>/auth/callback` as a callback URL and `<origin>/` as a logout
+   URL for every allowed origin (both localhost ports, plus
+   `frontendOrigin` when set). When deploying the frontend, set its
+   `VITE_REDIRECT_URI` to `<frontendOrigin>/auth/callback` so the two
+   sides keep matching.
+
+Once the Amplify (or other hosting) URL exists, deploy with:
 
 ```bash
 cdk deploy -c frontendOrigin=https://main.dXXXXXXXXXXXX.amplifyapp.com
@@ -81,9 +95,9 @@ cdk deploy -c frontendOrigin=https://main.dXXXXXXXXXXXX.amplifyapp.com
 
 Pass the exact scheme+host (no trailing slash, no path). Every later
 `cdk deploy` must repeat the `-c frontendOrigin=...` flag, or the origin
-drops back out of the CORS allowlist — to make it sticky, add
-`"frontendOrigin": "https://..."` to the `context` block of
-`infra/cdk.json` instead.
+drops back out of both the CORS allowlist and the Cognito redirect list —
+to make it sticky, add `"frontendOrigin": "https://..."` to the `context`
+block of `infra/cdk.json` instead.
 
 ## Deploy — exact ordered commands
 
@@ -110,7 +124,7 @@ cdk bootstrap aws://ACCOUNT_ID/us-west-2
 cdk synth
 
 # 5. Deploy. Add -c frontendOrigin=... once the hosted frontend URL exists
-#    (see "CORS: pass the frontend origin" above); without it only the
+#    (see "CORS and Cognito redirects: pass the frontend origin at deploy time" above); without it only the
 #    localhost dev origins are CORS-allowed.
 cdk deploy
 # later, with the real frontend URL:
@@ -158,11 +172,14 @@ Lambda roles, etc.) — approve them.
 
    # repeat with --group-name makers and a reviewer@example.edu username for the maker demo account
    ```
-4. **Update the Cognito app client's callback/logout URLs** once the
-   frontend is deployed (Amplify Hosting or otherwise) — the stack ships
-   `http://localhost:5173/` and `:5174/` as placeholders. Edit in the
-   console or add the real URL to `callback_urls`/`logout_urls` in
-   `_build_cognito` and redeploy.
+4. **Redeploy with the deployed frontend origin** once the frontend is
+   hosted (Amplify or otherwise):
+   `cdk deploy -c frontendOrigin=https://<frontend-host>` — this registers
+   `<origin>/auth/callback` as a Cognito callback URL and adds the origin
+   to the API's CORS allowlist in one shot (see "CORS and Cognito
+   redirects" above). No console edits needed; localhost dev callbacks
+   (`http://localhost:5173/auth/callback`, `:5174`) are registered from the
+   first deploy.
 5. **Paste stack outputs into the backend's env** (or Lambda console env
    vars if editing directly) — see the Outputs table below for which var
    maps to which output.
@@ -210,7 +227,7 @@ aws cloudformation describe-stacks --stack-name PolicyIntelligenceStack \
 - **The deployed frontend's CORS origin.** HTTP API CORS origins are
   literal strings, and the Amplify URL doesn't exist until the frontend is
   hosted — so it can't be hardcoded in the stack. Supplied at deploy time
-  via `-c frontendOrigin=...` (see "CORS: pass the frontend origin" above).
+  via `-c frontendOrigin=...` (see "CORS and Cognito redirects: pass the frontend origin at deploy time" above).
 
 ## Teardown
 

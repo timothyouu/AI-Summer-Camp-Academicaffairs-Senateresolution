@@ -6,7 +6,7 @@ from typing import Any
 
 from backend.app.auth import role_from_claims
 from backend.app.config import get_settings
-from backend.app.models import ConflictCreate
+from backend.app.models import ConflictCreate, ConflictUpdate
 from backend.app.retrieval import search
 from backend.app.stores import DynamoDBConflictStore, DynamoDBUploadStore
 
@@ -52,6 +52,34 @@ def test_dynamodb_stores_use_low_level_items(monkeypatch: Any) -> None:
     uploads = DynamoDBUploadStore(client)
     assert uploads.register("policy.pdf", "Pending")
     assert client.items[-1]["TableName"] == "Uploads"
+
+
+def test_dynamodb_conflict_ids_use_string_partition_keys(monkeypatch: Any) -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.get_keys: list[dict[str, object]] = []
+            self.put_items: list[dict[str, object]] = []
+            self.update_keys: list[dict[str, object]] = []
+
+        def get_item(self, **kwargs: object) -> dict[str, object]:
+            self.get_keys.append(dict(kwargs["Key"]))  # type: ignore[index]
+            return {}
+
+        def put_item(self, **kwargs: object) -> dict[str, object]:
+            self.put_items.append(dict(kwargs["Item"]))  # type: ignore[index]
+            return {}
+
+        def update_item(self, **kwargs: object) -> dict[str, object]:
+            self.update_keys.append(dict(kwargs["Key"]))  # type: ignore[index]
+            return {}
+
+    monkeypatch.setenv("DDB_CONFLICTS_TABLE", "ConflictLog")
+    store = DynamoDBConflictStore(Client())
+    created = store.create_or_get(ConflictCreate(source_a="A", source_b="B", topic="T", description="D"))
+    assert store.client.get_keys == [{"id": {"S": str(created.id)}}]  # type: ignore[attr-defined]
+    assert store.client.put_items[0]["id"] == {"S": str(created.id)}  # type: ignore[attr-defined]
+    store.update(created.id, ConflictUpdate(status="Resolved"))
+    assert store.client.update_keys == [{"id": {"S": str(created.id)}}]  # type: ignore[attr-defined]
 
 
 def test_cognito_group_role_mapping() -> None:

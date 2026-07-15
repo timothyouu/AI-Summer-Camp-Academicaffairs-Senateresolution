@@ -27,6 +27,7 @@ import {
   type Topic,
   type TopicDetail,
 } from "./data/mock";
+import { CognitoSessionExpiredError, getCognitoAuthorizationToken } from "./auth/cognito";
 
 const reviewSubmissionStorageKey = "policy-intelligence.review-submission";
 const conflictStateStorageKey = "policy-intelligence.conflict-state-v2";
@@ -80,10 +81,14 @@ const backendRequest = async <T>(path: string, init?: RequestInit): Promise<T | 
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 4_000);
   try {
-    const response = await fetch(`${apiBaseUrl}${path}`, { ...init, signal: controller.signal });
+    const authorizationToken = await getCognitoAuthorizationToken();
+    const headers = new Headers(init?.headers);
+    if (authorizationToken !== null) headers.set("Authorization", `Bearer ${authorizationToken}`);
+    const response = await fetch(`${apiBaseUrl}${path}`, { ...init, headers, signal: controller.signal });
     if (!response.ok) return null;
     return await response.json() as T;
-  } catch {
+  } catch (error) {
+    if (error instanceof CognitoSessionExpiredError) throw error;
     return null;
   } finally {
     window.clearTimeout(timeout);
