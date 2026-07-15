@@ -20,3 +20,18 @@
 2026-07-15T09:34:00-07:00 review round-16 codex-sol hit — Strands extractor isolation, Cognito logout/role UX, and AWS handoff fixes; 53 pytest, tsc/build, infra py_compile, diff check clean
 2026-07-15T09:52:30-07:00 review round-17 codex-terra hit — corpus prefix/metadata staging, DynamoDB seeding, and Amplify monorepo/SPA handoff; infra helper tests and diff check clean
 2026-07-15T09:52:30-07:00 review round-18 codex-sol hit — authoritative grounded Strands outputs, shared Cognito role sync, terminal ingestion states, and combined Phase A-C gate; 57 pytest, 2 infra tests, tsc/build, py_compile, corpus dry-run, diff check clean
+2026-07-15T15:44:38-07:00 implementation3 T1 hit — source registry and archive/activate lifecycle verified; commit 633fa3a
+2026-07-15T15:44:38-07:00 implementation3 T2 hit — registry-aware archive filtering and 0.5 archived-edition weighting verified; commit 725571f
+2026-07-15T15:44:38-07:00 implementation3 T3 hit — per-source-type permission store and upload enforcement verified; commit bf5e938
+2026-07-15T15:44:38-07:00 implementation3 T4 hit — role-shaped conflict visibility verified; commit 61a7593
+2026-07-15T15:44:38-07:00 implementation3 T5 hit — AI-assisted drafting loop and versioned draft store verified; commit bb23b4c
+2026-07-15T15:44:38-07:00 implementation3 T6 hit — stdlib catalog scraper and edition-tagged ingestion verified with injected fetcher; live network smoke pending; commit 98fdc80
+2026-07-15T15:44:38-07:00 implementation3 T7 hit — frontend identity, role, registry, permission, and drafting API bindings passed strict tsc and production build; commit bc4f199
+2026-07-15T15:44:38-07:00 implementation3 T10 hit — persisted dark mode, shared back buttons, and emblem-to-login navigation passed strict tsc and production build; commit 1068a7d
+2026-07-15T15:44:38-07:00 implementation3 T11 hit — three DynamoDB tables, catalog scraper Lambda, env wiring, IAM grants, py_compile, and infra tests verified; commit 3707d57
+2026-07-15T15:56:00-07:00 implementation3 T8 hit — Sources archive lifecycle, upload-processing continuity, and permission panel passed 81 backend tests, strict tsc/build, and browser archive/unarchive plus permission-reload checks; commit 25bc50f
+2026-07-15T15:56:00-07:00 implementation3 integration fix — registry startup reseeding now preserves catalog edition metadata; regression test added; commit 89870df
+2026-07-15T15:56:00-07:00 implementation3 integration fix — frontend trace mappings accept backend citations=null; resolution and drafting browser flows restored; commit 6476a93
+2026-07-15T15:56:00-07:00 implementation3 T9 hit — reviewer Draft Assistant, adopt/re-check loop, shared resource catalog, reviewer/employee visibility, and canonical links verified in browser; commit 0c02e1b
+2026-07-15T15:56:00-07:00 implementation3 catalog live smoke hit — current 2026 catalog scraped 15 pages/89 chunks; archived 2024–2025 catalog scraped 15 pages/83 chunks; isolated registries confirmed active current/non-current metadata
+2026-07-15T16:18:31-07:00 implementation3 consolidated review hit — fixed AWS catalog packaging/metadata and registry seeding, Bedrock filename lifecycle matching, local reviewer authorization, Cognito chat CORS, and concurrent DynamoDB draft versioning; 87 backend tests, strict tsc/build, 3 infra tests, py_compile, Lambda handler import, and diff check passed; commit 25bc582

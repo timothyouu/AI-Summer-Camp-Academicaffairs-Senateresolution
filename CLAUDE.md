@@ -49,7 +49,20 @@ Planned (not yet installed — needs Tim's approval): fastapi, uvicorn, boto3, p
 - New: `backend/app/stores.py` (SQLite/DynamoDB store abstraction), `backend/app/agents/` (Notion-design 6-agent conflict pipeline with `agent_trace` output; Strands SDK activates when `strands` importable + `BEDROCK_KB_ID` set), `backend/app/lambda_entry.py` (Mangum), `backend/lambda_handlers/ingestion.py` (S3→KB sync), `infra/` (CDK Python stack, see infra/README.md), `frontend/src/auth/cognito.ts` + `AuthCallback.tsx` (Hosted UI PKCE behind `VITE_USE_COGNITO` — zero new npm deps; aws-amplify deliberately not used), `frontend/src/components/AgentActivity.tsx` (trace panel).
 - Not yet installed (approved, pending Tim): boto3, mangum, strands-agents, aws-cdk-lib. All such imports are lazy/guarded; tests must keep passing without them.
 
+## PRD Round-2 (2026-07-15)
+
+- Source lifecycle is backed by a dual-mode SQLite/DynamoDB registry (`GET /api/sources`, `POST /api/sources/{id}/status`). Corpus seeds start active; documents arriving through uploads start archived. Retrieval drops archived sources after retrieval and down-ranks non-current catalog editions by 0.5.
+- Source permissions attach per user and source type (`handbook`, `cba`, `policystat`, `catalog`, `uploads`) with independent `can_add` / `can_edit` flags. The demo reviewer is the admin and is seeded with full access; identified uploads require the `uploads` add grant. Local identity comes from `X-User-Email`; verified Cognito claims take over when Cognito is configured.
+- Conflict responses are role-shaped: employees receive non-clickable escalation guidance with raw conflict sources and IDs removed, while reviewers retain full detail. Local role comes from `X-Role` and defaults to reviewer for compatibility; Cognito claims are authoritative in AWS mode.
+- The reviewer-only drafting loop is available at `POST /api/draft/revise` and `GET /api/draft/{id}/versions`. Draft versions use SQLite locally or DynamoDB when `DDB_DRAFTS_TABLE` is set, with a deterministic zero-Bedrock fallback.
+- Catalog ingestion is stdlib-only (`urllib.request` + `html.parser`). Run the current catalog plus exactly one archived edition through `backend/scripts/scrape_catalog.py` or the manually invoked `CatalogScraperFn`; edition metadata drives the retrieval weighting above.
+- Frontend API bindings for registry, permissions, drafting, demo identity, and role headers are complete. The shared `/catalog` page is available to both roles; employees see active sources only, while reviewers also see lifecycle status. The Sources page supports archive/unarchive and per-source-type permissions, and the reviewer Resolution Checker mounts the iterative Draft Assistant.
+- Dark mode uses CSS variables, defaults to light, persists in localStorage, and is controlled from the sidebar gear's settings popover. Shared back buttons are wired, and the sidebar emblem navigates to `/login`.
+- AWS round-2 resources are independently env-gated with `DDB_REGISTRY_TABLE`, `DDB_PERMISSIONS_TABLE`, and `DDB_DRAFTS_TABLE`. Cognito stays optional and OFF for the demo unless both backend `COGNITO_*` values and frontend `VITE_USE_COGNITO` settings are enabled.
+
 ## Last Updated
+2026-07-15 — PRD round-2 implementation documented, including source lifecycle and permissions UI, shared resource catalog, drafting assistant, live current/archive catalog smoke results, dark-mode/navigation, and AWS infrastructure.
+
 2026-07-14 (evening) — Sidebar unified to one icon rail with persisted role + Library→Search chats (see Sidebar Unification section); verified via tsc, vite build, and Playwright click-through of both roles.
 
 Previous: 2026-07-14 (later) — Frontend COMPLETE and verified: 12 pages (`frontend/src/pages/`), shared layout/sidebar/role-switcher components, typed mocks (`src/data/mock.ts`) behind `src/api.ts`. Verified via tsc --strict, vite build, and a Playwright click-through of all 6 demo paths plus frame-by-frame screenshot judgment (see PROGRESS.md, incl. WSL screenshot workaround). Run with `cd frontend && npm run dev`. Backend still not built.

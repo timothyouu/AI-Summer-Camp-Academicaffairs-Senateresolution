@@ -109,8 +109,16 @@ file without exporting it does not change modes.
 | `BEDROCK_KB_ID` | Bedrock KB retrieval (replaces NumPy index) + Strands mode (if `strands` installed) |
 | `DDB_CONFLICTS_TABLE` | DynamoDB conflict log (replaces SQLite) |
 | `DDB_UPLOADS_TABLE` | DynamoDB upload registry (replaces SQLite) |
+| `DDB_REGISTRY_TABLE` | DynamoDB source registry (replaces SQLite) |
+| `DDB_PERMISSIONS_TABLE` | DynamoDB per-user, per-source-type permissions (replaces SQLite) |
+| `DDB_DRAFTS_TABLE` | DynamoDB versioned drafting history (replaces SQLite) |
 | `CORPUS_BUCKET` | presigned S3 PUT uploads + event-driven ingestion |
 | `COGNITO_USER_POOL_ID` + `COGNITO_CLIENT_ID` | Cognito JWT auth, roles from `cognito:groups` (replaces demo accounts) |
+
+For the demo, Cognito remains optional and OFF. With Cognito unset, conflict
+visibility uses the frontend's demo `X-Role` header (and defaults to reviewer
+for header-less compatibility). Cognito claims become authoritative only after
+the backend `COGNITO_*` variables and frontend `VITE_USE_COGNITO=true` are set.
 
 ## 5. Frontend env vars
 
@@ -172,3 +180,62 @@ other client routes return a hosting 404 before React can route them.
    then answer a question from it.
 3. Sign in via the hosted UI as each demo user — employee vs reviewer routing
    should follow the Cognito group.
+
+## 7. Catalog scrape
+
+The catalog scraper is intentionally manual for the demo. Invoke it once for
+the current 2026 catalog and once for exactly one archived edition. It writes
+scraped Markdown to the corpus bucket and registers each page with its edition
+metadata; archived-edition retrieval results remain eligible but are weighted
+at 0.5 relative to current-edition results.
+
+The Lambda's physical name is not a stack output. Find it after deployment:
+
+```bash
+export CATALOG_SCRAPER_FUNCTION="$(aws lambda list-functions \
+  --query "Functions[?starts_with(FunctionName, 'PolicyIntelligenceStack-CatalogScraperFn')].FunctionName | [0]" \
+  --output text)"
+```
+
+Invoke the current edition:
+
+```bash
+aws lambda invoke --function-name "$CATALOG_SCRAPER_FUNCTION" \
+  --payload '{"url": "https://catalog.csub.edu/", "year": 2026, "is_current": true}' \
+  --cli-binary-format raw-in-base64-out response-current.json
+```
+
+Then invoke the selected 2024–2025 archived edition without marking it current:
+
+```bash
+aws lambda invoke --function-name "$CATALOG_SCRAPER_FUNCTION" \
+  --payload '{"url": "https://catalog.csub.edu/archivedcatalogs/2024-2025/", "year": 2024, "is_current": false}' \
+  --cli-binary-format raw-in-base64-out response-archived.json
+```
+
+The scraper writes both the Markdown and Bedrock metadata sidecars under the
+included `raw/` prefix. Start one Knowledge Base ingestion job after both
+invocations so the new catalog pages become retrievable:
+
+```bash
+aws bedrock-agent start-ingestion-job \
+  --knowledge-base-id <BedrockKbId> \
+  --data-source-id <BedrockDataSourceId>
+```
+
+Local zero-AWS equivalents, run from the repository root:
+
+```bash
+cd backend
+.venv/bin/python -m scripts.scrape_catalog \
+  --url https://catalog.csub.edu/ --year 2026 --current --max-pages 15
+.venv/bin/python -m scripts.scrape_catalog \
+  --url https://catalog.csub.edu/archivedcatalogs/2024-2025/ --year 2024 --max-pages 15
+cd ..
+```
+
+The local live network smoke test passed on 2026-07-15 using isolated data
+roots: the current edition scraped 15 pages into 89 chunks, and the 2024–2025
+archive scraped 15 pages into 83 chunks. Registry checks confirmed active,
+current metadata for 2026 and active, non-current metadata for 2024. Repeat the
+Lambda invocations after deployment to validate the AWS path.

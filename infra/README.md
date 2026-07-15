@@ -38,11 +38,11 @@ succeed but the Lambda will 500 on cold start with an `ImportError`:
   is the **repo root** (with an exclude list keeping frontend/node_modules,
   `.git`, and local demo data out of the zip) and the handler string is
   `backend.lambda_handlers.ingestion.handler`.
-- **Catalog scraper Lambda** (`CatalogScraperFn`) — same repo-root asset
-  root and import style as `IngestionFn` (`backend.lambda_handlers
-  .catalog_scraper.handler`). No S3/EventBridge trigger — invoked manually
-  per catalog edition (see "Catalog scraper — manual invoke payloads"
-  below).
+- **Catalog scraper Lambda** (`CatalogScraperFn`) — packages `backend/` as
+  its asset root, with handler `lambda_handlers.catalog_scraper.handler`, so
+  its `app.catalog` import and shared backend dependencies resolve in Lambda.
+  No S3/EventBridge trigger — invoke it manually per catalog edition (see
+  "Catalog scraper — manual invoke payloads" below).
 
 Env var names on the API and ingestion Lambdas are pinned to exactly what
 `backend/app/config.py`'s `get_settings()` reads: `BEDROCK_KB_ID`,
@@ -168,13 +168,19 @@ Lambda roles, etc.) — approve them.
      --stack-name PolicyIntelligenceStack \
      --query "Stacks[0].Outputs[?OutputKey=='CorpusBucketName'].OutputValue | [0]" \
      --output text)"
-   backend/.venv/bin/python infra/scripts/prepare_corpus.py --bucket "$CORPUS_BUCKET"
+   export DDB_REGISTRY_TABLE="$(aws cloudformation describe-stacks \
+     --stack-name PolicyIntelligenceStack \
+     --query "Stacks[0].Outputs[?OutputKey=='DdbRegistryTable'].OutputValue | [0]" \
+     --output text)"
+   backend/.venv/bin/python infra/scripts/prepare_corpus.py \
+     --bucket "$CORPUS_BUCKET" --registry-table "$DDB_REGISTRY_TABLE"
    ```
 
-   The helper stages every declared source under an included prefix and writes
+   The helper stages every declared source under an included prefix, writes
    a Bedrock `<document>.metadata.json` sidecar with `source`, `section`,
-   `doc_type`, and `topic`. It refuses to proceed when a checked-in source is
-   missing or a new source has not been explicitly classified.
+   `doc_type`, and `topic`, and seeds matching active rows in the source
+   registry. It refuses to proceed when a checked-in source is missing or a
+   new source has not been explicitly classified.
 2. **Run the initial KB sync** (ingestion Lambda only fires on *new* uploads
    after the stack exists; the corpus copied in step 1 needs one manual
    sync):
@@ -242,7 +248,7 @@ Lambda roles, etc.) — approve them.
 | CDK output | Backend env var | Notes |
 |---|---|---|
 | `AwsRegion` | `AWS_REGION` | us-west-2 by default |
-| `CorpusBucketName` | `CORPUS_BUCKET` | prefixes: `handbook/`, `cba/`, `resolutions/`, `synthetic/`, `uploads/` |
+| `CorpusBucketName` | `CORPUS_BUCKET` | prefixes: `handbook/`, `cba/`, `resolutions/`, `synthetic/`, `uploads/`, `raw/` |
 | `BedrockKbId` | `BEDROCK_KB_ID` | |
 | `BedrockDataSourceId` | *(not read by backend)* | not a backend env var — ingestion.py resolves it at runtime via `list_data_sources()`; use this output only for the manual `start-ingestion-job` CLI call in step 2 above |
 | `DdbConflictsTable` | `DDB_CONFLICTS_TABLE` | table name is literally `ConflictLog` |
@@ -278,6 +284,15 @@ per catalog edition with the AWS CLI (or the console "Test" tab). It writes
 scraped pages into `CorpusBucketName` and upserts rows into
 `DdbRegistryTable`; per implementation3.md Task 2, archived editions are
 down-ranked (`ARCHIVED_EDITION_WEIGHT = 0.5`) relative to the current one.
+The scraper writes Bedrock metadata sidecars under the data source's included
+`raw/` prefix. After both editions finish, start one Knowledge Base ingestion
+job so the pages become available to retrieval:
+
+```bash
+aws bedrock-agent start-ingestion-job \
+  --knowledge-base-id <BedrockKbId> \
+  --data-source-id <BedrockDataSourceId>
+```
 
 Current 2026 catalog (`is_current: true`):
 
