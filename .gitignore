@@ -1,0 +1,14 @@
+# Frontend dependencies and build artifacts
+frontend/node_modules/
+frontend/dist/
+
+# Python virtual environments and runtime artifacts
+backend/.venv/
+__pycache__/
+*.py[cod]
+*.sqlite3
+data/app.db
+data/index/
+
+# Local browser automation output
+.playwright-mcp/
