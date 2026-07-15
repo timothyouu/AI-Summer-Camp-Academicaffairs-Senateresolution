@@ -37,7 +37,7 @@ def test_topics_health_and_upload(client: TestClient) -> None:
     upload = client.post("/api/upload", files={"file": ("new-guidance.txt", b"Accessible instructional technology requires an equally effective alternative.", "text/plain")})
     assert health.status_code == 200 and health.json()["provider"] == "local-hash-embedding"
     assert topics.status_code == 200 and topics.json()
-    assert upload.status_code == 200 and upload.json()["chunks_added"] == 1
+    assert upload.status_code == 201 and upload.json()["chunks_added"] == 1
 
 
 def test_upload_rejects_unsupported_type(client: TestClient) -> None:
