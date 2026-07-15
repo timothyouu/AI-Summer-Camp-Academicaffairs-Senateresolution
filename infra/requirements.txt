@@ -1,0 +1,6 @@
+# AWS CDK Python dependencies for the Policy Intelligence Assistant infra stack.
+# NOT installed in this dev environment (installs are hook-blocked here) — Tim installs
+# these locally or in CI before running `cdk deploy`. See infra/README.md for the exact
+# ordered commands.
+aws-cdk-lib>=2.150.0,<3.0.0
+constructs>=10.0.0,<11.0.0

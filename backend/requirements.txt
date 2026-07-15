@@ -6,3 +6,6 @@ pypdf>=5,<7
 python-multipart>=0.0.9,<1
 pytest>=8,<10
 uvicorn[standard]>=0.30,<1
+boto3>=1.35,<2
+mangum>=0.19,<1
+strands-agents>=1,<2

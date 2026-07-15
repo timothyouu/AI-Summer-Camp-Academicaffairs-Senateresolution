@@ -3,8 +3,10 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from .agents import GroundedPassage, PipelineResult, create_pipeline
+from .auth import require_authenticated
 from .conflicts import create_or_get_conflict
 from .models import ChatRequest, ChatResponse, Citation, ConflictCreate, ConflictSignal
 from .retrieval import SearchResult, search
@@ -91,11 +93,16 @@ def _citations(values: tuple[tuple[str, str, str], ...]) -> list[Citation]:
 
 
 def _local_index_answer(results: list[SearchResult]) -> ChatResponse:
+    pipeline_result = create_pipeline().run(
+        " ".join(result.topic for result in results[:3]) or "policy question",
+        passages=[GroundedPassage(text=result.text, span=result.text, source=result.source, section=result.section, doc_type=result.doc_type, topic=result.topic, page=result.page) for result in results],
+    )
     if not results:
         return ChatResponse(
             answer="The local policy index is empty or has no matching passages. Build the index or ask one of the calibrated demo questions.",
             citations=[],
             mode="local-index",
+            agent_trace=pipeline_result.agent_trace,
         )
     selected = results[:3]
     summary = " ".join(result.text[:360].strip() for result in selected)
@@ -104,14 +111,60 @@ def _local_index_answer(results: list[SearchResult]) -> ChatResponse:
         answer=f"The most relevant supplied policy passages state: {summary}",
         citations=citations,
         mode="local-index",
+        agent_trace=pipeline_result.agent_trace,
+    )
+
+
+def _agent_grounded_answer(result: PipelineResult) -> ChatResponse:
+    claims = result.claims[:6]
+    citations = [
+        Citation(id=index, source=claim.source, section=claim.section, excerpt=claim.citation_span)
+        for index, claim in enumerate(claims, start=1)
+        if claim.source != "Submitted draft"
+    ]
+    accepted = [item for item in result.verified_conflicts if item.accepted]
+    if claims:
+        statements = "\n\n".join(
+            f"{claim.citation_span} ({claim.source}, {claim.section})"
+            for claim in claims if claim.source != "Submitted draft"
+        )
+        answer = f"The agent pipeline verified these grounded policy statements:\n\n{statements}"
+    else:
+        answer = "The agent pipeline could not extract a grounded policy claim from the retrieved passages, so it abstained."
+    signal: ConflictSignal | None = None
+    if accepted:
+        sources = sorted({
+            claim.source
+            for item in accepted
+            for claim in (item.analysis.claim_a, item.analysis.claim_b)
+            if claim is not None
+        })
+        guidance = result.escalation or "Multiple grounded answers require human policy review."
+        signal = ConflictSignal(detected=True, sources=sources, guidance=guidance)
+        answer = f"{answer}\n\n{guidance}"
+    elif result.abstained and result.escalation:
+        answer = f"{answer}\n\n{result.escalation}"
+    return ChatResponse(
+        answer=answer,
+        citations=citations,
+        conflict=signal,
+        mode="agent-grounded",
+        agent_trace=result.agent_trace,
     )
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(payload: ChatRequest) -> ChatResponse:
+def chat(payload: ChatRequest, _: None = Depends(require_authenticated)) -> ChatResponse:
+    pipeline = create_pipeline()
+    if pipeline.authoritative:
+        return _agent_grounded_answer(pipeline.run(payload.question))
     fixture = _calibrated(payload.question)
     if fixture is None:
         return _local_index_answer(search(payload.question, k=6))
+    pipeline_result = pipeline.run(
+        payload.question,
+        passages=[GroundedPassage(text=excerpt, span=excerpt, source=source, section=section, topic=payload.question) for source, section, excerpt in fixture.citations],
+    )
     signal: ConflictSignal | None = None
     if fixture.conflict is not None:
         source_a, source_b, topic, description = fixture.conflict
@@ -122,4 +175,4 @@ def chat(payload: ChatRequest) -> ChatResponse:
             guidance="Review the later source's adoption/effective status and consult Faculty Affairs before relying on superseded wording.",
             conflict_id=record.id,
         )
-    return ChatResponse(answer=fixture.answer, citations=_citations(fixture.citations), conflict=signal, mode="calibrated-static")
+    return ChatResponse(answer=fixture.answer, citations=_citations(fixture.citations), conflict=signal, mode="calibrated-static", agent_trace=pipeline_result.agent_trace)

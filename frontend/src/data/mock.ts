@@ -95,7 +95,7 @@ export interface ConflictDetail {
   disclaimer: string;
 }
 
-export type SourceStatus = "Ready" | "Processing 64%" | "Needs review";
+export type SourceStatus = "Pending" | "Ingesting" | "Ready" | "Failed" | "Processing 64%" | "Needs review";
 
 export interface KnowledgeSource {
   title: string;
@@ -137,6 +137,18 @@ export interface ReviewAnalysis {
   findings: ReviewFinding[];
   recommendation: string;
   demoLabel: string;
+  agentTrace: AgentTraceStep[];
+}
+
+export type AgentName = "orchestrator" | "retrieval" | "extractor" | "conflict" | "verifier" | "escalation";
+export type AgentTraceStatus = "pending" | "running" | "complete" | "warning" | "failed";
+
+export interface AgentTraceStep {
+  agent: AgentName;
+  label: string;
+  status: AgentTraceStatus;
+  detail?: string;
+  citations?: Citation[];
 }
 
 export const suggestionChips = [
@@ -622,4 +634,12 @@ export const reviewAnalysis: ReviewAnalysis = {
   ],
   recommendation: "Static demo result: amend the existing stand-in policy rather than create a duplicate resolution.",
   demoLabel: "Calibrated static demo: AI policy stand-in scenario",
+  agentTrace: [
+    { agent: "orchestrator", label: "Orchestrator scoped the resolution", status: "complete", detail: "Classified the draft as generative-AI governance and dispatched grounded review tasks." },
+    { agent: "retrieval", label: "Retrieval grounded 18 passages", status: "complete", detail: "Ranked passages from four supplied policy sources before any finding was produced.", citations: [{ id: 1, title: "Senate Resolution 2024-07 (Demo stand-in)", section: "§3 • Responsible use" }, { id: 2, title: "Administrative AI Standard (Demo stand-in)", section: "§2 • Data handling" }] },
+    { agent: "extractor", label: "Extractors mapped draft obligations", status: "complete", detail: "Parallel extractors compared acceptable use, disclosure, integrity, and data-protection provisions." },
+    { agent: "conflict", label: "Conflict detector found a policy tension", status: "warning", detail: "The draft's broad approval wording may conflict with the supplied administrative standard's restricted-data controls.", citations: [{ id: 3, title: "Administrative AI Standard (Demo stand-in)", section: "§2 • Restricted data" }] },
+    { agent: "verifier", label: "Verifier checked cited spans", status: "complete", detail: "Every displayed finding is tied to a retrieved source span; no unsupported conclusion was retained." },
+    { agent: "escalation", label: "Escalation recommended human review", status: "warning", detail: "Route the data-handling tension to Academic Technology before the resolution advances." },
+  ],
 };

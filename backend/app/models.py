@@ -26,6 +26,18 @@ class Citation(BaseModel):
     excerpt: str = ""
 
 
+AgentName = Literal["orchestrator", "retrieval", "extractor", "conflict", "verifier", "escalation"]
+AgentTraceStatus = Literal["pending", "running", "complete", "warning", "failed"]
+
+
+class AgentTraceStep(BaseModel):
+    agent: AgentName
+    label: str
+    status: AgentTraceStatus
+    detail: str | None = None
+    citations: list[Citation] | None = None
+
+
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4_000)
 
@@ -41,7 +53,8 @@ class ChatResponse(BaseModel):
     answer: str
     citations: list[Citation]
     conflict: ConflictSignal | None = None
-    mode: Literal["local-index", "calibrated-static"] = "local-index"
+    mode: Literal["local-index", "calibrated-static", "agent-grounded"] = "local-index"
+    agent_trace: list[AgentTraceStep] = Field(default_factory=list)
 
 
 class ResolutionRequest(BaseModel):
@@ -59,7 +72,8 @@ class ResolutionResponse(BaseModel):
     duplicates: list[ResolutionFinding] = Field(default_factory=list)
     conflicts: list[ResolutionFinding] = Field(default_factory=list)
     recommendation: str
-    mode: Literal["local-index", "calibrated-static"] = "local-index"
+    mode: Literal["local-index", "calibrated-static", "agent-grounded"] = "local-index"
+    agent_trace: list[AgentTraceStep] = Field(default_factory=list)
 
 
 class TopicSummary(BaseModel):
@@ -105,6 +119,28 @@ class UploadResponse(BaseModel):
     filename: str
     status: str
     chunks_added: int
+    upload_url: str | None = None
+
+
+IngestionStatus = Literal["pending", "ingesting", "ready", "failed"]
+
+
+class PresignedUploadRequest(BaseModel):
+    filename: str
+    content_type: str
+
+
+class PresignedUploadResponse(BaseModel):
+    upload_id: str
+    upload_url: str
+    headers: dict[str, str] | None = None
+
+
+class IngestionResponse(BaseModel):
+    upload_id: str
+    status: IngestionStatus
+    chunks_added: int | None = None
+    error: str | None = None
 
 
 class HealthResponse(BaseModel):

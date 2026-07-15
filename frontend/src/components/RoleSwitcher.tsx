@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { signOutCognito } from "../auth/cognito";
 import { useRole } from "../state/role";
+
+const cognitoModeEnabled = import.meta.env.VITE_USE_COGNITO === "true";
 
 export default function RoleSwitcher() {
   const { role, setRole } = useRole();
@@ -14,6 +17,19 @@ export default function RoleSwitcher() {
     setOpen(false);
     navigate(nextRole === "employee" ? "/chats" : "/reviews");
   };
+
+  if (cognitoModeEnabled) {
+    return (
+      <div className="flex items-center gap-3">
+        <span className="rounded-lg border border-navy/25 bg-white px-4 py-2.5 text-sm font-medium text-navy">
+          {role === "employee" ? "Employee / Faculty" : "Policy Reviewer / Writer"}
+        </span>
+        <button type="button" onClick={signOutCognito} className="rounded-lg border border-navy/25 bg-white px-4 py-2.5 text-sm font-medium text-brand-blue hover:bg-blue-50">
+          Sign out
+        </button>
+      </div>
+    );
+  }
 
   if (role === "employee" && isChatsHome) {
     return (

@@ -44,6 +44,11 @@ Planned (not yet installed — needs Tim's approval): fastapi, uvicorn, boto3, p
 - /library page is now "Search chats" (chats-only searchable history; Saved policies tab removed). The route and file name Library.tsx are unchanged.
 - Note: `demo workflow.md`'s frame map predates this unification; the sidebar behavior above supersedes it where they conflict.
 
+## AWS Readiness (prod branch, 2026-07-15)
+- Branch `prod` (off `demo`) implements implementation2.md code-side: everything runs locally with zero AWS, and each integration flips to AWS via env vars — see `AWS_SETUP.md` (ordered manual steps) and `LOOP.md` (locked decisions). Verifier: `backend/.venv/bin/python -m pytest backend/tests -q` (17 tests) + `cd frontend && npx tsc --noEmit && npm run build`.
+- New: `backend/app/stores.py` (SQLite/DynamoDB store abstraction), `backend/app/agents/` (Notion-design 6-agent conflict pipeline with `agent_trace` output; Strands SDK activates when `strands` importable + `BEDROCK_KB_ID` set), `backend/app/lambda_entry.py` (Mangum), `backend/lambda_handlers/ingestion.py` (S3→KB sync), `infra/` (CDK Python stack, see infra/README.md), `frontend/src/auth/cognito.ts` + `AuthCallback.tsx` (Hosted UI PKCE behind `VITE_USE_COGNITO` — zero new npm deps; aws-amplify deliberately not used), `frontend/src/components/AgentActivity.tsx` (trace panel).
+- Not yet installed (approved, pending Tim): boto3, mangum, strands-agents, aws-cdk-lib. All such imports are lazy/guarded; tests must keep passing without them.
+
 ## Last Updated
 2026-07-14 (evening) — Sidebar unified to one icon rail with persisted role + Library→Search chats (see Sidebar Unification section); verified via tsc, vite build, and Playwright click-through of both roles.
 

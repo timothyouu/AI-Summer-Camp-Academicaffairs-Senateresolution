@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .config import INDEX_DIR
+from .config import INDEX_DIR, get_settings
 from .llm import EMBEDDING_DIMENSION, embed_texts
 
 
@@ -77,4 +77,37 @@ def reload_index() -> None:
 
 
 def search(query: str, k: int = 8) -> list[SearchResult]:
+    settings = get_settings()
+    if settings.retrieval_aws:
+        return _search_knowledge_base(query, k)
     return INDEX.search(query, k)
+
+
+def _search_knowledge_base(query: str, k: int) -> list[SearchResult]:
+    settings = get_settings()
+    if not settings.retrieval_aws:
+        return []
+    import boto3  # type: ignore[import-not-found]  # Lazy: absent in local mode.
+
+    client = boto3.client("bedrock-agent-runtime", region_name=settings.aws_region)
+    response = client.retrieve(
+        knowledgeBaseId=settings.bedrock_kb_id,
+        retrievalQuery={"text": query},
+        retrievalConfiguration={"vectorSearchConfiguration": {"numberOfResults": max(1, k)}},
+    )
+    results: list[SearchResult] = []
+    for item in response.get("retrievalResults", []):
+        metadata = item.get("metadata", {})
+        location = item.get("location", {})
+        uri = location.get("s3Location", {}).get("uri", "Unknown source")
+        page_value = metadata.get("page") or metadata.get("x-amz-bedrock-kb-document-page-number")
+        results.append(SearchResult(
+            text=str(item.get("content", {}).get("text", "")),
+            source=str(metadata.get("source") or uri.rsplit("/", 1)[-1]),
+            section=str(metadata.get("section", "Document")),
+            doc_type=str(metadata.get("doc_type", "document")),
+            page=int(page_value) if page_value is not None else None,
+            topic=str(metadata.get("topic", "senate procedures")),
+            score=float(item.get("score", 0.0)),
+        ))
+    return results

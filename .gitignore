@@ -1,6 +1,7 @@
 # Frontend dependencies and build artifacts
 frontend/node_modules/
 frontend/dist/
+infra/cdk.out/
 
 # Python virtual environments and runtime artifacts
 backend/.venv/

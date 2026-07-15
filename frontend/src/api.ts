@@ -11,6 +11,9 @@ import {
   topicDetails,
   topics,
   type Answer,
+  type AgentName,
+  type AgentTraceStatus,
+  type AgentTraceStep,
   type Conflict,
   type ConflictDetail,
   type DraftResolution,
@@ -24,12 +27,20 @@ import {
   type Topic,
   type TopicDetail,
 } from "./data/mock";
+import { CognitoSessionExpiredError, getCognitoAuthorizationToken } from "./auth/cognito";
 
 const reviewSubmissionStorageKey = "policy-intelligence.review-submission";
 const conflictStateStorageKey = "policy-intelligence.conflict-state-v2";
 const manualConflictsStorageKey = "policy-intelligence.manual-conflicts-v1";
 const uploadedSourcesStorageKey = "policy-intelligence.uploaded-sources-v1";
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "");
+const hasConfiguredApi = Boolean(import.meta.env.VITE_API_BASE_URL);
+// The two long-running agent endpoints (chat, check-resolution) run retrieval
+// plus a multi-agent Bedrock pipeline that can exceed API Gateway HTTP API's
+// hard 29s integration cap. In AWS mode they are served by a Lambda Function
+// URL (up to 15 min) supplied here; unset, they fall back to the normal API
+// base so local/dev behavior is byte-for-byte unchanged.
+const agentBaseUrl = (import.meta.env.VITE_AGENT_BASE_URL ?? "").replace(/\/$/, "") || apiBaseUrl;
 
 interface BackendCitation { id: number; source: string; section: string; excerpt: string; }
 interface BackendChatResponse {
@@ -43,7 +54,15 @@ interface BackendResolutionResponse {
   duplicates: BackendResolutionFinding[];
   conflicts: BackendResolutionFinding[];
   recommendation: string;
-  mode: "local-index" | "calibrated-static";
+  mode: "local-index" | "calibrated-static" | "agent-grounded";
+  agent_trace: BackendAgentTrace[];
+}
+interface BackendAgentTrace {
+  agent: AgentName;
+  label: string;
+  status: AgentTraceStatus;
+  detail?: string;
+  citations?: BackendCitation[];
 }
 interface BackendConflict {
   id: number;
@@ -55,17 +74,32 @@ interface BackendConflict {
   created_at: string;
 }
 interface BackendUploadResponse { filename: string; status: string; chunks_added: number; }
+interface BackendPresignedUploadResponse {
+  upload_id: string;
+  upload_url: string;
+  headers?: Record<string, string>;
+}
+interface BackendIngestionResponse { upload_id: string; status: IngestionStatus; chunks_added?: number; error?: string; }
 interface BackendTopicSummary { name: string; count: number; }
 interface BackendTopicDetail { name: string; chunks: Array<{ source: string; section: string; excerpt: string }>; }
 
-const backendRequest = async <T>(path: string, init?: RequestInit): Promise<T | null> => {
+// Bedrock-backed endpoints (chat, resolution checks) run retrieval plus a
+// multi-agent LLM pipeline server-side and routinely exceed a few seconds.
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+const AGENT_REQUEST_TIMEOUT_MS = 120_000;
+
+const backendRequest = async <T>(path: string, init?: RequestInit, timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS, baseUrl: string = apiBaseUrl): Promise<T | null> => {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 4_000);
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${apiBaseUrl}${path}`, { ...init, signal: controller.signal });
+    const authorizationToken = await getCognitoAuthorizationToken();
+    const headers = new Headers(init?.headers);
+    if (authorizationToken !== null) headers.set("Authorization", `Bearer ${authorizationToken}`);
+    const response = await fetch(`${baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     if (!response.ok) return null;
     return await response.json() as T;
-  } catch {
+  } catch (error) {
+    if (error instanceof CognitoSessionExpiredError) throw error;
     return null;
   } finally {
     window.clearTimeout(timeout);
@@ -100,11 +134,36 @@ export interface LoginResult {
   name: string;
 }
 
+export type { AgentName, AgentTraceStatus, AgentTraceStep };
+export type IngestionStatus = "pending" | "ingesting" | "ready" | "failed";
+
+export interface PresignedUpload {
+  uploadId: string;
+  uploadUrl: string;
+  headers: Record<string, string>;
+  mock: boolean;
+}
+
+export interface IngestionUpdate {
+  uploadId: string;
+  status: IngestionStatus;
+  chunksAdded?: number;
+  error?: string;
+}
+
+export interface SourceUpload {
+  source: KnowledgeSource;
+  uploadId: string;
+}
+
 const delay = async (milliseconds = 80): Promise<void> => {
   await new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
 };
 
 export async function login(role: Role): Promise<LoginResult> {
+  if (import.meta.env.VITE_USE_COGNITO === "true") {
+    throw new Error("Demo login is unavailable while Cognito sign-in is enabled.");
+  }
   const email = role === "reviewer" ? "reviewer@campus.edu" : "employee@campus.edu";
   const result = await backendRequest<LoginResult>("/api/login", {
     method: "POST",
@@ -164,7 +223,7 @@ export async function askQuestion(text: string): Promise<Answer> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question }),
-  });
+  }, AGENT_REQUEST_TIMEOUT_MS, agentBaseUrl);
   if (backend !== null) {
     const paragraphs = backend.answer.split(/\n\s*\n/).filter(Boolean);
     return {
@@ -376,10 +435,102 @@ export function saveUploadedSource(source: KnowledgeSource): KnowledgeSource {
   return { ...source };
 }
 
+const sourceTypeFromFile = (file: File): KnowledgeSource["type"] => {
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  return extension === "pdf" ? "PDF" : extension === "docx" ? "DOCX" : "TXT";
+};
+
+const sourceFromIngestion = (file: File, update: IngestionUpdate): KnowledgeSource => ({
+  title: file.name.replace(/\.[^.]+$/, ""),
+  type: sourceTypeFromFile(file),
+  passages: update.chunksAdded ?? Math.max(1, Math.round(file.size / 2_400)),
+  status: update.status === "pending" ? "Pending" : update.status === "ingesting" ? "Ingesting" : update.status === "ready" ? "Ready" : "Failed",
+  updated: "Just now",
+});
+
+const mockUploadStartedAt = new Map<string, number>();
+const MAX_INGESTION_STATUS_FAILURES = 3;
+
+export async function requestPresignedUpload(file: File): Promise<PresignedUpload> {
+  if (hasConfiguredApi) {
+    const backend = await backendRequest<BackendPresignedUploadResponse>("/api/uploads/presign", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: file.name, content_type: file.type || "application/octet-stream" }),
+    });
+    if (backend !== null) return { uploadId: backend.upload_id, uploadUrl: backend.upload_url, headers: backend.headers ?? {}, mock: false };
+    throw new Error("Unable to start the source upload. Please try again.");
+  }
+  const uploadId = `mock-upload-${Date.now()}`;
+  mockUploadStartedAt.set(uploadId, Date.now());
+  return { uploadId, uploadUrl: `mock://uploads/${uploadId}`, headers: {}, mock: true };
+}
+
+export async function putPresignedFile(file: File, upload: PresignedUpload): Promise<void> {
+  if (upload.mock) {
+    await delay(120);
+    return;
+  }
+  const headers = new Headers(upload.headers);
+  // Without CORPUS_BUCKET the presign endpoint hands back our own protected
+  // /api/upload URL, which the auth middleware guards — attach the bearer
+  // token there, but never leak it to S3 presigned URLs.
+  if (upload.uploadUrl.startsWith(`${apiBaseUrl}/`)) {
+    const authorizationToken = await getCognitoAuthorizationToken();
+    if (authorizationToken !== null) headers.set("Authorization", `Bearer ${authorizationToken}`);
+  }
+  const response = await fetch(upload.uploadUrl, { method: "PUT", headers, body: file });
+  if (!response.ok) throw new Error("The source file could not be uploaded to storage.");
+}
+
+export async function getIngestionStatus(uploadId: string): Promise<IngestionUpdate> {
+  if (hasConfiguredApi) {
+    const backend = await backendRequest<BackendIngestionResponse>(`/api/uploads/${encodeURIComponent(uploadId)}`);
+    if (backend !== null) return { uploadId: backend.upload_id, status: backend.status, chunksAdded: backend.chunks_added, error: backend.error };
+    throw new Error("Unable to check ingestion status.");
+  }
+  const elapsed = Date.now() - (mockUploadStartedAt.get(uploadId) ?? Date.now());
+  const status: IngestionStatus = elapsed < 650 ? "pending" : elapsed < 2_250 ? "ingesting" : "ready";
+  return { uploadId, status, ...(status === "ready" ? { chunksAdded: 12 } : {}) };
+}
+
+export async function pollIngestionStatus(uploadId: string, onUpdate: (update: IngestionUpdate) => void): Promise<IngestionUpdate> {
+  let consecutiveFailures = 0;
+  while (true) {
+    let update: IngestionUpdate;
+    try {
+      update = await getIngestionStatus(uploadId);
+      consecutiveFailures = 0;
+    } catch (reason) {
+      if (!hasConfiguredApi) throw reason;
+      consecutiveFailures += 1;
+      if (consecutiveFailures < MAX_INGESTION_STATUS_FAILURES) {
+        await delay(600);
+        continue;
+      }
+      update = {
+        uploadId,
+        status: "failed",
+        error: reason instanceof Error ? reason.message : "Unable to check ingestion status.",
+      };
+    }
+    onUpdate(update);
+    if (update.status === "ready" || update.status === "failed") return update;
+    await delay(600);
+  }
+}
+
+/** Starts the same presigned-URL upload protocol used by the AWS deployment. */
+export async function startSourceUpload(file: File): Promise<SourceUpload> {
+  const upload = await requestPresignedUpload(file);
+  await putPresignedFile(file, upload);
+  const pending: IngestionUpdate = { uploadId: upload.uploadId, status: "pending" };
+  return { source: saveUploadedSource(sourceFromIngestion(file, pending)), uploadId: upload.uploadId };
+}
+
 export async function uploadSource(file: File): Promise<KnowledgeSource> {
   const title = file.name.replace(/\.[^.]+$/, "");
-  const extension = file.name.split(".").pop()?.toLowerCase();
-  const type: KnowledgeSource["type"] = extension === "pdf" ? "PDF" : "TXT";
+  const type = sourceTypeFromFile(file);
   const formData = new FormData();
   formData.append("file", file);
   const result = await backendRequest<BackendUploadResponse>("/api/upload", { method: "POST", body: formData });
@@ -401,7 +552,7 @@ export async function checkResolution(text: string): Promise<ReviewAnalysis> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
-  });
+  }, AGENT_REQUEST_TIMEOUT_MS, agentBaseUrl);
   if (backend !== null) {
     const findings = [
       ...backend.overlaps.map((finding) => ({ type: "Overlap" as const, source: `${finding.source} • ${finding.section}` })),
@@ -409,17 +560,21 @@ export async function checkResolution(text: string): Promise<ReviewAnalysis> {
       ...backend.conflicts.map((finding) => ({ type: "Conflict" as const, source: `${finding.source} • ${finding.section}` })),
     ];
     return {
-      demoLabel: backend.mode === "calibrated-static" ? "Calibrated local demo analysis" : "Local source-index analysis",
+      demoLabel: backend.mode === "agent-grounded" ? "Grounded Strands agent analysis" : backend.mode === "calibrated-static" ? "Calibrated local demo analysis" : "Local source-index analysis",
       steps: [{ label: "Retrieved passages", complete: true }, { label: "Compared sources", complete: true }, { label: "Classified findings", complete: true }, { label: "Prepared recommendation", complete: true }],
       coverageLabel: findings.length > 0 ? "Coverage found in supplied sources" : "No material overlap found",
       confidence: findings.length > 0 ? 94 : 70,
       findings,
       recommendation: backend.recommendation,
+      agentTrace: (Array.isArray(backend.agent_trace) ? backend.agent_trace : reviewAnalysis.agentTrace).map(({ citations, ...step }) => ({
+        ...step,
+        ...(citations === undefined ? {} : { citations: citations.map((citation) => "source" in citation ? { id: citation.id, title: citation.source, section: citation.section } : { ...citation }) }),
+      })),
     };
   }
   await delay();
   if (/\b(artificial intelligence|generative ai|ai tools?|large language model)\b/.test(normalized)) {
-    return { ...reviewAnalysis, steps: reviewAnalysis.steps.map((step) => ({ ...step })), findings: reviewAnalysis.findings.map((finding) => ({ ...finding })) };
+    return { ...reviewAnalysis, steps: reviewAnalysis.steps.map((step) => ({ ...step })), findings: reviewAnalysis.findings.map((finding) => ({ ...finding })), agentTrace: reviewAnalysis.agentTrace.map((step) => ({ ...step, ...(step.citations === undefined ? {} : { citations: step.citations.map((citation) => ({ ...citation })) }) })) };
   }
   if (/\b(ferp|faculty early retirement|retired annuitant|960 hours?)\b/.test(normalized)) {
     return {
@@ -433,6 +588,14 @@ export async function checkResolution(text: string): Promise<ReviewAnalysis> {
         { type: "Possible duplicate", source: "CSUB FERP FAQs • campus implementation guidance" },
       ],
       recommendation: "Static demo result: reconcile the draft with the most restrictive CBA and CalPERS limit, then confirm the individual appointment with Faculty Affairs.",
+      agentTrace: [
+        { agent: "orchestrator", label: "Orchestrator scoped the FERP review", status: "complete", detail: "Directed a grounded comparison of appointment limits and retirement guidance." },
+        { agent: "retrieval", label: "Retrieval collected 12 passages", status: "complete", detail: "Retrieved CBA, CalPERS, and campus FAQ passages.", citations: [{ id: 1, title: "Unit 3 Collective Bargaining Agreement", section: "Article 29.8-29.9" }, { id: 2, title: "CalPERS Employment After Retirement", section: "960-hour limit" }] },
+        { agent: "extractor", label: "Extractors compared numeric limits", status: "complete", detail: "Parallel extraction isolated 90-workday, 50% timebase, and 960-hour constraints." },
+        { agent: "conflict", label: "Conflict detector found overlapping limits", status: "warning", detail: "The sources impose cumulative constraints; an individual appointment requires confirmation." },
+        { agent: "verifier", label: "Verifier checked supporting spans", status: "complete", detail: "The recommendation is tied to retrieved source sections." },
+        { agent: "escalation", label: "Escalation routed appointment review", status: "warning", detail: "Faculty Affairs should confirm the applicable limit for the individual appointment." },
+      ],
     };
   }
   return {
@@ -442,5 +605,13 @@ export async function checkResolution(text: string): Promise<ReviewAnalysis> {
     confidence: 0,
     findings: [],
     recommendation: "This static demo will not invent overlap or conflict findings for unrelated text. Use the FERP or generative-AI sample, or connect the production retrieval service.",
+    agentTrace: [
+      { agent: "orchestrator", label: "Orchestrator received the draft", status: "complete", detail: "Prepared a grounded review request." },
+      { agent: "retrieval", label: "Retrieval found no calibrated evidence", status: "warning", detail: "The local demo has no reviewed source scenario for this text." },
+      { agent: "extractor", label: "Extraction abstained", status: "pending", detail: "No unsupported obligations were extracted." },
+      { agent: "conflict", label: "Conflict detection abstained", status: "pending", detail: "No finding was generated without source coverage." },
+      { agent: "verifier", label: "Verifier preserved abstention", status: "complete", detail: "The result correctly avoids ungrounded conclusions." },
+      { agent: "escalation", label: "Escalation requested source review", status: "warning", detail: "Connect production retrieval or review the source set manually." },
+    ],
   };
 }

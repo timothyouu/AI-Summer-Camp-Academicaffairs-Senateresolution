@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from "react";
-import { getSources, uploadSource } from "../api";
+import { getSources, pollIngestionStatus, saveUploadedSource, startSourceUpload } from "../api";
 import type { KnowledgeSource, SourceStatus } from "../data/mock";
 
 type Tab = "All sources" | "Processing" | "Needs review";
-const statusStyles: Record<SourceStatus, string> = { Ready: "border border-green-300 bg-green-50 text-green-800", "Processing 64%": "border border-blue-400 bg-white text-brand-blue", "Needs review": "border border-amber-300 bg-amberbg text-amber-700" };
+const statusStyles: Record<SourceStatus, string> = {
+  Pending: "border border-slate-300 bg-slate-50 text-slate-700",
+  Ingesting: "border border-blue-400 bg-white text-brand-blue",
+  Ready: "border border-green-300 bg-green-50 text-green-800",
+  Failed: "border border-red-300 bg-red-50 text-red-800",
+  "Processing 64%": "border border-blue-400 bg-white text-brand-blue",
+  "Needs review": "border border-amber-300 bg-amberbg text-amber-700",
+};
 
 function Status({ status }: { status: SourceStatus }) {
-  return <div><span className={`inline-flex rounded-full px-3 py-1 text-base ${statusStyles[status]}`}>{status}</span>{status === "Processing 64%" && <span className="mt-2 block h-1 w-40 rounded bg-blue-100"><span className="block h-1 w-[64%] rounded bg-brand-blue" /></span>}</div>;
+  const processing = status === "Processing 64%" || status === "Ingesting";
+  return <div><span className={`inline-flex rounded-full px-3 py-1 text-base ${statusStyles[status]}`}>{status}</span>{processing && <span className="mt-2 block h-1 w-40 rounded bg-blue-100"><span className={`block h-1 rounded bg-brand-blue ${status === "Ingesting" ? "w-1/2 animate-pulse" : "w-[64%]"}`} /></span>}</div>;
 }
 
 export default function Sources() {
@@ -16,8 +24,14 @@ export default function Sources() {
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { void getSources().then(setSources).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Unable to load knowledge sources.")); }, []);
-  const visible = useMemo(() => sources.filter((source) => (tab === "All sources" || (tab === "Processing" ? source.status.startsWith("Processing") : source.status === "Needs review")) && source.title.toLowerCase().includes(search.toLowerCase())), [sources, tab, search]);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    let active = true;
+    void getSources().then((nextSources) => { if (active) setSources(nextSources); }).catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : "Unable to load knowledge sources."); });
+    return () => { active = false; mountedRef.current = false; };
+  }, []);
+  const visible = useMemo(() => sources.filter((source) => (tab === "All sources" || (tab === "Processing" ? source.status.startsWith("Processing") || source.status === "Pending" || source.status === "Ingesting" : source.status === "Needs review")) && source.title.toLowerCase().includes(search.toLowerCase())), [sources, tab, search]);
   const addFile = async (file: File) => {
     const extension = file.name.split(".").pop()?.toLowerCase();
     if (!extension || !["pdf", "md", "txt"].includes(extension)) {
@@ -27,12 +41,23 @@ export default function Sources() {
     const title = file.name.replace(/\.[^.]+$/, "");
     setError("");
     setFeedback(`${file.name} is being indexed…`);
-    const uploaded = await uploadSource(file);
-    setSources((current) => [uploaded, ...current.filter((source) => source.title !== title)]);
+    const uploaded = await startSourceUpload(file);
+    setSources((current) => [uploaded.source, ...current.filter((source) => source.title !== title)]);
     setTab("All sources");
     setSearch("");
     setError("");
-    setFeedback(uploaded.status === "Ready" ? `${file.name} indexed successfully.` : `${file.name} saved in offline demo mode; backend indexing is pending.`);
+    setFeedback(`${file.name} uploaded; waiting for ingestion.`);
+    void pollIngestionStatus(uploaded.uploadId, (update) => {
+      if (!mountedRef.current) return;
+      const nextSource = saveUploadedSource({
+        ...uploaded.source,
+        passages: update.chunksAdded ?? uploaded.source.passages,
+        status: update.status === "pending" ? "Pending" : update.status === "ingesting" ? "Ingesting" : update.status === "ready" ? "Ready" : "Failed",
+      });
+      setSources((current) => [nextSource, ...current.filter((source) => source.title !== title)]);
+      if (update.status === "ready") setFeedback(`${file.name} indexed successfully.`);
+      if (update.status === "failed") setError(update.error ?? `${file.name} could not be indexed.`);
+    }).catch((reason: unknown) => { if (mountedRef.current) setError(reason instanceof Error ? reason.message : "Unable to check ingestion status."); });
   };
   const chooseFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
