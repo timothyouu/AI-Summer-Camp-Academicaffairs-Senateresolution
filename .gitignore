@@ -7,6 +7,8 @@ backend/.venv/
 __pycache__/
 *.py[cod]
 *.sqlite3
+data/app.db
+data/index/
 
 # Local browser automation output
 .playwright-mcp/
