@@ -13,3 +13,4 @@
 2026-07-15T06:58:04-07:00 review round-9 fixes hit (inline) — corpus bucket CORS for browser PUT, idempotent conflict create race (41 pytest)
 2026-07-15T07:06:48-07:00 review round-10 fixes hit — app-wide Cognito auth middleware (inline), KB-backed topics (sol); 46 pytest
 2026-07-15T07:09:28-07:00 review round-11 fixes hit (inline) — event-size upload limit, bearer token on same-backend PUT (47 pytest)
+2026-07-15T07:12:10-07:00 review round-12 — ingesting-record preservation fixed (inline); JWT-500 finding verified false positive, pinned with 401 regression tests (51 pytest)

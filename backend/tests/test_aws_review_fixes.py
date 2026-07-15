@@ -61,6 +61,10 @@ def test_ingestion_conflict_leaves_uploads_pending_without_job(monkeypatch: Any)
     class Store:
         def __init__(self) -> None:
             self.calls: list[dict[str, object]] = []
+            self.existing: dict[str, object] = {}
+
+        def get(self, upload_id: str) -> object | None:
+            return self.existing.get(upload_id)
 
         def register(
             self, filename: str, status: str, chunks_added: int = 0, upload_id: str | None = None,
@@ -194,3 +198,57 @@ def test_ingestion_rejects_oversized_objects_before_starting_jobs(monkeypatch: A
     assert result == {"processed": 1}
     assert store.calls[0]["status"] == "failed"
     assert "limit" in str(store.calls[0]["error"])
+
+
+def test_ingestion_conflict_preserves_actively_ingesting_records(monkeypatch: Any) -> None:
+    from backend.app.stores import UploadRecord
+
+    class ConcurrentJobError(Exception):
+        response = {"Error": {"Code": "ConflictException", "Message": "A concurrent ingestion job is already running"}}
+
+    class Store:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+            self.records = {"upload-1": UploadRecord(
+                upload_id="upload-1", filename="handbook.pdf", status="ingesting", chunks_added=0, ingestion_job_id="job-9",
+            )}
+
+        def get(self, upload_id: str) -> UploadRecord | None:
+            return self.records.get(upload_id)
+
+        def register(self, filename: str, status: str, chunks_added: int = 0, upload_id: str | None = None,
+                     ingestion_job_id: str | None = None, error: str | None = None) -> str:
+            self.calls.append({"upload_id": upload_id, "status": status})
+            return upload_id or filename
+
+    class BedrockClient:
+        def list_data_sources(self, **_kwargs: object) -> dict[str, object]:
+            return {"dataSourceSummaries": [{"dataSourceId": "source-123"}]}
+
+        def start_ingestion_job(self, **_kwargs: object) -> dict[str, object]:
+            raise ConcurrentJobError()
+
+    store = Store()
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    monkeypatch.setenv("BEDROCK_KB_ID", "kb-123")
+    monkeypatch.setenv("DDB_UPLOADS_TABLE", "Uploads")
+    monkeypatch.setattr(ingestion, "upload_store", lambda: store)
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *_args, **_kwargs: BedrockClient()))
+
+    result = ingestion.handler({"Records": [
+        {"s3": {"object": {"key": "uploads%2Fupload-1%2Fhandbook.pdf"}}},
+        {"s3": {"object": {"key": "uploads%2Fupload-2%2Fpolicy.md"}}},
+    ]}, object())
+
+    assert result == {"processed": 2}
+    assert store.calls == [{"upload_id": "upload-2", "status": "pending"}]
+
+
+@pytest.mark.parametrize("token", ["Bearer not.a.jwt", "Bearer %%%.###.@@@", "Bearer A.A.A"])
+def test_malformed_bearer_tokens_return_401_not_500(client: TestClient, monkeypatch: Any, token: str) -> None:
+    monkeypatch.setenv("COGNITO_USER_POOL_ID", "us-west-2_pool")
+    monkeypatch.setenv("COGNITO_CLIENT_ID", "client")
+
+    response = client.get("/api/conflicts", headers={"Authorization": token})
+
+    assert response.status_code == 401

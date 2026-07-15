@@ -44,6 +44,11 @@ def handler(event: dict[str, Any], context: object) -> dict[str, int]:
                 store.register(filename, "failed", upload_id=upload_id, error=str(error) or error.__class__.__name__)
             raise
         for upload_id, filename in uploads:
+            # Status polling may have already started a job for this upload;
+            # overwriting its record would orphan the active job id.
+            existing = store.get(upload_id)
+            if existing is not None and existing.status == "ingesting" and existing.ingestion_job_id:
+                continue
             store.register(filename, "pending", upload_id=upload_id)
         return {"processed": len(uploads) + rejected}
     for upload_id, filename in uploads:
