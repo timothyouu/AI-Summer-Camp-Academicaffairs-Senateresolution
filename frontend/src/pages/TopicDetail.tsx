@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { getTopic } from "../api";
+import BackButton from "../components/BackButton";
 import type { TopicDetail as TopicDetailData } from "../data/mock";
 
 const canonicalConversationId = "service-credit";
@@ -24,6 +25,7 @@ export default function TopicDetail() {
   if (error) return <section className="mx-auto max-w-[1136px] pt-2"><div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-5 py-4 text-red-800"><p className="font-semibold">Unable to load this topic</p><p className="mt-1 text-sm">{error}</p></div></section>;
   if (detail === null) return <section className="mx-auto max-w-[1136px] pt-2"><p role="status" className="text-inkmuted">Loading policy topic…</p></section>;
   return <section className="mx-auto max-w-[1136px] pt-2 text-navy">
+    <BackButton fallback="/topics" />
     <nav aria-label="Breadcrumb" className="flex gap-3 text-lg"><Link to="/topics" className="font-medium text-brand-blue hover:underline">Topics</Link><span>/</span><span className="text-navy/85">{detail.topic.name}</span></nav>
     <h1 className="mt-11 text-[58px] font-bold leading-none tracking-[-0.04em]">{detail.topic.name}</h1>
     <p className="mt-4 text-xl text-inkmuted">{detail.topic.description}</p>

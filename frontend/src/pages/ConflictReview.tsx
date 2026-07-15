@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { getConflict, getConflictResolutionNote, getConflicts, resolveConflict } from "../api";
+import BackButton from "../components/BackButton";
 import type { ConflictDetail, ConflictStatus } from "../data/mock";
 
 type ConflictReviewDetail = ConflictDetail & { status: ConflictStatus };
@@ -61,6 +62,7 @@ export default function ConflictReview() {
 
   return (
     <section className="mx-auto max-w-[1255px] pb-2 text-navy">
+      <BackButton fallback="/conflicts" />
       <nav className="pt-1 text-lg text-inkmuted"><Link to="/conflicts" className="text-brand-blue hover:underline">Conflict log</Link><span className="mx-4">/</span><span>{detail.title}</span></nav>
       <div className="mt-12 flex items-start justify-between border-b border-navy/20 pb-7">
         <div><div className="flex items-center gap-6"><h1 className="text-[42px] font-bold leading-tight tracking-tight">{detail.title}</h1><span className={`rounded-md border px-5 py-2 text-xl ${statusStyles[detail.status]}`}>{detail.status}</span></div><p className="mt-6 text-lg text-inkmuted">{detail.subtitle}</p></div>

@@ -1,6 +1,7 @@
-import { NavLink } from "react-router-dom";
+import { Link, NavLink } from "react-router-dom";
 import type { Role } from "../data/mock";
 import Logo from "./Logo";
+import SettingsMenu from "./SettingsMenu";
 
 type IconName = "plus" | "search" | "document" | "topics" | "reviews" | "warning" | "globe" | "bell" | "gear";
 
@@ -46,7 +47,9 @@ export default function Sidebar({ role }: { role: Role }) {
 
   return (
     <aside className="fixed inset-y-0 left-0 z-20 flex w-24 flex-col overflow-y-auto border-r border-navy/10 bg-cream">
-      <div className="flex h-24 items-center justify-center"><Logo size={45} /></div>
+      <div className="flex h-24 items-center justify-center">
+        <Link to="/login" aria-label="Return to role selection"><Logo size={45} /></Link>
+      </div>
       <nav className="mt-3" aria-label="Primary navigation">
         {items.map((item, index) => (
           <NavLink key={`${item.label}-${index}`} to={item.to} end={item.to === "/chats"} className={(state) => navClass({ isActive: item.showActive !== false && state.isActive })}>
@@ -60,7 +63,7 @@ export default function Sidebar({ role }: { role: Role }) {
         <div className="flex items-center justify-center py-3 text-navy">
           <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-navy text-sm text-white">AB<span className="absolute right-0 top-0 h-3 w-3 rounded-full bg-gold ring-2 ring-cream" /></span>
         </div>
-        <div className="flex flex-col items-center gap-1 py-3 text-xs text-navy"><Icon name="gear" /><span>Settings</span></div>
+        <SettingsMenu />
       </div>
     </aside>
   );

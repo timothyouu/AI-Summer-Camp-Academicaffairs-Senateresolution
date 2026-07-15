@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { askQuestion, getConversation } from "../api";
+import BackButton from "../components/BackButton";
 import { type Answer, type Citation } from "../data/mock";
 
 type Tab = "Answer" | "Sources" | "Related";
@@ -134,6 +135,7 @@ export default function ChatAnswer() {
 
   return (
     <section className="mx-auto max-w-[806px] pb-3 text-navy">
+      <BackButton fallback="/chats" />
       <div className="ml-auto max-w-[592px] rounded-xl bg-[#f2f1f0] px-6 py-5 text-base">{submittedQuestion ?? initialAnswer?.question ?? (loadError ? "Conversation unavailable" : "Loading conversation…")}</div>
 
       <div className="mt-7 flex gap-10 border-b border-navy/20">

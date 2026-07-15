@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { checkResolution, getReviewSubmission } from "../api";
 import AgentActivity from "../components/AgentActivity";
+import BackButton from "../components/BackButton";
 import type { ReviewAnalysis, ReviewSubmission } from "../data/mock";
 
 function DocumentIcon() { return <svg className="h-10 w-10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M6 2h8l4 4v16H6zM14 2v5h4M9 12h6M9 16h6"/></svg>; }
@@ -41,6 +42,7 @@ export default function ReviewResults() {
 
   return (
     <section className="mx-auto -mt-1 max-w-[780px] pb-4 text-navy-text">
+      <BackButton fallback="/reviews" />
       <h1 className="text-center text-[32px] font-bold tracking-tight text-navy">Check a resolution</h1>
       <p className="mt-1 text-center text-sm text-inkmuted">Find overlap, duplicate coverage, and policy conflicts before drafting.</p>
 

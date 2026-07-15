@@ -2,6 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --c-navy: 22 48 94; --c-navy-deep: 18 42 84; --c-navy-text: 27 42 74;
+  --c-brand-blue: 29 78 216; --c-cream: 247 245 241; --c-amberbg: 254 247 230;
+  --c-inkmuted: 91 107 130; --c-white: 255 255 255;
+}
+
+.dark {
+  --c-navy: 226 232 240; --c-navy-deep: 241 245 249; --c-navy-text: 214 222 235;
+  --c-brand-blue: 96 165 250; --c-cream: 20 28 44; --c-amberbg: 51 44 24;
+  --c-inkmuted: 148 163 184; --c-white: 15 23 42;
+}
+
 body {
-  @apply bg-cream text-navy-text antialiased;
+  @apply bg-white text-navy-text antialiased;
 }

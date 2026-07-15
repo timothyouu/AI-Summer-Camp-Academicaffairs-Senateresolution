@@ -16,6 +16,7 @@ import Sources from "./pages/Sources";
 import TopicDetail from "./pages/TopicDetail";
 import TopicList from "./pages/TopicList";
 import { RoleProvider, useRole } from "./state/role";
+import { ThemeProvider } from "./state/theme";
 import { cognitoSessionExpiredEvent, getCognitoAuthorizationToken, roleFromIdToken } from "./auth/cognito";
 
 const cognitoModeEnabled = import.meta.env.VITE_USE_COGNITO === "true";
@@ -104,7 +105,7 @@ function AppRoutes() {
 }
 
 export default function App() {
-  return <RoleProvider><CognitoSessionRedirect /><AppRoutes /></RoleProvider>;
+  return <ThemeProvider><RoleProvider><CognitoSessionRedirect /><AppRoutes /></RoleProvider></ThemeProvider>;
 }
 
 function CognitoSessionRedirect() {
