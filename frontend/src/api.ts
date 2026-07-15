@@ -471,7 +471,15 @@ export async function putPresignedFile(file: File, upload: PresignedUpload): Pro
     await delay(120);
     return;
   }
-  const response = await fetch(upload.uploadUrl, { method: "PUT", headers: upload.headers, body: file });
+  const headers = new Headers(upload.headers);
+  // Without CORPUS_BUCKET the presign endpoint hands back our own protected
+  // /api/upload URL, which the auth middleware guards — attach the bearer
+  // token there, but never leak it to S3 presigned URLs.
+  if (upload.uploadUrl.startsWith(`${apiBaseUrl}/`)) {
+    const authorizationToken = await getCognitoAuthorizationToken();
+    if (authorizationToken !== null) headers.set("Authorization", `Bearer ${authorizationToken}`);
+  }
+  const response = await fetch(upload.uploadUrl, { method: "PUT", headers, body: file });
   if (!response.ok) throw new Error("The source file could not be uploaded to storage.");
 }
 

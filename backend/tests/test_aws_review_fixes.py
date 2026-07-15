@@ -162,3 +162,35 @@ def test_conditional_conflict_update_failure_becomes_api_not_found(monkeypatch: 
     assert response.json() == {"detail": "Conflict not found"}
     assert client.update_kwargs is not None
     assert client.update_kwargs["ConditionExpression"] == "attribute_exists(id)"
+
+
+def test_ingestion_rejects_oversized_objects_before_starting_jobs(monkeypatch: Any) -> None:
+    from backend.app.config import MAX_UPLOAD_BYTES
+
+    class Store:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def register(self, filename: str, status: str, chunks_added: int = 0, upload_id: str | None = None,
+                     ingestion_job_id: str | None = None, error: str | None = None) -> str:
+            self.calls.append({"filename": filename, "status": status, "error": error})
+            return upload_id or filename
+
+    class BedrockClient:
+        def list_data_sources(self, **_kwargs: object) -> dict[str, object]:
+            raise AssertionError("no ingestion should start for an oversized-only event")
+
+    store = Store()
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    monkeypatch.setenv("BEDROCK_KB_ID", "kb-123")
+    monkeypatch.setenv("DDB_UPLOADS_TABLE", "Uploads")
+    monkeypatch.setattr(ingestion, "upload_store", lambda: store)
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *_args, **_kwargs: BedrockClient()))
+
+    result = ingestion.handler({"Records": [{"s3": {"object": {
+        "key": "uploads%2Fbig-1%2Fhuge.pdf", "size": MAX_UPLOAD_BYTES + 1,
+    }}}]}, object())
+
+    assert result == {"processed": 1}
+    assert store.calls[0]["status"] == "failed"
+    assert "limit" in str(store.calls[0]["error"])

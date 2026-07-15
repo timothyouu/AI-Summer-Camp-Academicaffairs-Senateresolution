@@ -9,7 +9,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 
 from .auth import require_reviewer
-from .config import UPLOAD_DIR, ensure_data_directories, get_settings
+from .config import MAX_UPLOAD_BYTES, UPLOAD_DIR, ensure_data_directories, get_settings
 from .ingest import append_to_index
 from .models import IngestionResponse, PresignedUploadRequest, PresignedUploadResponse, UploadResponse
 from .retrieval import reload_index
@@ -18,7 +18,6 @@ from .stores import UploadRecord, UploadStore, upload_store
 
 router = APIRouter(prefix="/api", tags=["uploads"])
 ALLOWED_SUFFIXES = {".pdf", ".md", ".txt"}
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 INGESTION_STATUSES = {"pending", "ingesting", "ready", "failed"}
 
 

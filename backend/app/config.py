@@ -14,6 +14,9 @@ CORPUS_DIR = DATA_ROOT / "corpus"
 INDEX_DIR = DATA_ROOT / "index"
 DATABASE_PATH = Path(os.getenv("POLICY_DATABASE_PATH", DATA_ROOT / "app.db"))
 UPLOAD_DIR = CORPUS_DIR / "uploads"
+# Shared by the API upload endpoints and the ingestion Lambda (which must not
+# import the FastAPI app), so it lives here rather than in uploads.py.
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 
 @dataclass(frozen=True)

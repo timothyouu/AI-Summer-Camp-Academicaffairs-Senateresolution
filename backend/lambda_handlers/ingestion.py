@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import unquote_plus
 
-from backend.app.config import get_settings
+from backend.app.config import MAX_UPLOAD_BYTES, get_settings
 from backend.app.stores import upload_store
 
 
@@ -14,10 +14,22 @@ def handler(event: dict[str, Any], context: object) -> dict[str, int]:
         raise RuntimeError("AWS_REGION and BEDROCK_KB_ID are required")
     import boto3  # type: ignore[import-not-found]
     bedrock: Any = boto3.client("bedrock-agent", region_name=settings.aws_region)
-    uploads = [_upload_from_key(str(record["s3"]["object"]["key"])) for record in event.get("Records", [])]
-    if not uploads:
-        return {"processed": 0}
     store = upload_store()
+    uploads: list[tuple[str, str]] = []
+    rejected = 0
+    for record in event.get("Records", []):
+        s3_object = record["s3"]["object"]
+        upload_id, filename = _upload_from_key(str(s3_object["key"]))
+        # Presigned PUT URLs cannot carry a size policy, so the local
+        # MAX_UPLOAD_BYTES limit is enforced here from the event's object size
+        # before any ingestion job is started.
+        if int(s3_object.get("size", 0)) > MAX_UPLOAD_BYTES:
+            store.register(filename, "failed", upload_id=upload_id, error=f"File exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit")
+            rejected += 1
+            continue
+        uploads.append((upload_id, filename))
+    if not uploads:
+        return {"processed": rejected}
     data_source_id = _data_source_id(bedrock, str(settings.bedrock_kb_id))
     try:
         response = bedrock.start_ingestion_job(
@@ -33,10 +45,10 @@ def handler(event: dict[str, Any], context: object) -> dict[str, int]:
             raise
         for upload_id, filename in uploads:
             store.register(filename, "pending", upload_id=upload_id)
-        return {"processed": len(uploads)}
+        return {"processed": len(uploads) + rejected}
     for upload_id, filename in uploads:
         store.register(filename, "ingesting", upload_id=upload_id, ingestion_job_id=job_id)
-    return {"processed": len(uploads)}
+    return {"processed": len(uploads) + rejected}
 
 
 def _upload_from_key(encoded_key: str) -> tuple[str, str]:

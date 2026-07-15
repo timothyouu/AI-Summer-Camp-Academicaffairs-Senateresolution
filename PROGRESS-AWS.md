@@ -12,3 +12,4 @@
 2026-07-15T06:54:58-07:00 review round-8 fixes hit (inline) — Strands message text extraction, uploads/ S3 notification filter (40 pytest)
 2026-07-15T06:58:04-07:00 review round-9 fixes hit (inline) — corpus bucket CORS for browser PUT, idempotent conflict create race (41 pytest)
 2026-07-15T07:06:48-07:00 review round-10 fixes hit — app-wide Cognito auth middleware (inline), KB-backed topics (sol); 46 pytest
+2026-07-15T07:09:28-07:00 review round-11 fixes hit (inline) — event-size upload limit, bearer token on same-backend PUT (47 pytest)
