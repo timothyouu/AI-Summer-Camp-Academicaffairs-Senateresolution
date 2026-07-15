@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -72,15 +72,40 @@ class IndexStore:
 INDEX = IndexStore()
 
 
+ARCHIVED_EDITION_WEIGHT = 0.5
+
+
 def reload_index() -> None:
     INDEX.load()
 
 
+def apply_registry_policy(results: list[SearchResult], k: int) -> list[SearchResult]:
+    """Drop archived sources and down-rank non-current editions using the registry.
+
+    Sources without a registry entry pass through untouched so local test
+    corpora and pre-registry indexes keep working byte-for-byte.
+    """
+    from .registry import registry_store
+
+    try:
+        records = {record.title: record for record in registry_store().list()}
+    except Exception:
+        return results[:k]
+    kept: list[SearchResult] = []
+    for item in results:
+        record = records.get(item.source)
+        if record is not None and record.status == "archived":
+            continue
+        if record is not None and not record.is_current:
+            item = replace(item, score=item.score * ARCHIVED_EDITION_WEIGHT)
+        kept.append(item)
+    return sorted(kept, key=lambda value: value.score, reverse=True)[:k]
+
+
 def search(query: str, k: int = 8) -> list[SearchResult]:
     settings = get_settings()
-    if settings.retrieval_aws:
-        return _search_knowledge_base(query, k)
-    return INDEX.search(query, k)
+    fetched = _search_knowledge_base(query, k * 2) if settings.retrieval_aws else INDEX.search(query, k * 2)
+    return apply_registry_policy(fetched, k)
 
 
 def _search_knowledge_base(query: str, k: int) -> list[SearchResult]:
