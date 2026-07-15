@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from fastapi import APIRouter
 
+from .agents import GroundedPassage, create_pipeline
 from .conflicts import create_or_get_conflict
 from .models import ChatRequest, ChatResponse, Citation, ConflictCreate, ConflictSignal
 from .retrieval import SearchResult, search
@@ -91,11 +92,16 @@ def _citations(values: tuple[tuple[str, str, str], ...]) -> list[Citation]:
 
 
 def _local_index_answer(results: list[SearchResult]) -> ChatResponse:
+    pipeline_result = create_pipeline().run(
+        " ".join(result.topic for result in results[:3]) or "policy question",
+        passages=[GroundedPassage(text=result.text, span=result.text, source=result.source, section=result.section, doc_type=result.doc_type, topic=result.topic, page=result.page) for result in results],
+    )
     if not results:
         return ChatResponse(
             answer="The local policy index is empty or has no matching passages. Build the index or ask one of the calibrated demo questions.",
             citations=[],
             mode="local-index",
+            agent_trace=pipeline_result.agent_trace,
         )
     selected = results[:3]
     summary = " ".join(result.text[:360].strip() for result in selected)
@@ -104,6 +110,7 @@ def _local_index_answer(results: list[SearchResult]) -> ChatResponse:
         answer=f"The most relevant supplied policy passages state: {summary}",
         citations=citations,
         mode="local-index",
+        agent_trace=pipeline_result.agent_trace,
     )
 
 
@@ -112,6 +119,10 @@ def chat(payload: ChatRequest) -> ChatResponse:
     fixture = _calibrated(payload.question)
     if fixture is None:
         return _local_index_answer(search(payload.question, k=6))
+    pipeline_result = create_pipeline().run(
+        payload.question,
+        passages=[GroundedPassage(text=excerpt, span=excerpt, source=source, section=section, topic=payload.question) for source, section, excerpt in fixture.citations],
+    )
     signal: ConflictSignal | None = None
     if fixture.conflict is not None:
         source_a, source_b, topic, description = fixture.conflict
@@ -122,4 +133,4 @@ def chat(payload: ChatRequest) -> ChatResponse:
             guidance="Review the later source's adoption/effective status and consult Faculty Affairs before relying on superseded wording.",
             conflict_id=record.id,
         )
-    return ChatResponse(answer=fixture.answer, citations=_citations(fixture.citations), conflict=signal, mode="calibrated-static")
+    return ChatResponse(answer=fixture.answer, citations=_citations(fixture.citations), conflict=signal, mode="calibrated-static", agent_trace=pipeline_result.agent_trace)
