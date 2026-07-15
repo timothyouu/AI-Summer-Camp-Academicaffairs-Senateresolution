@@ -12,6 +12,7 @@ from .auth import require_reviewer
 from .config import MAX_UPLOAD_BYTES, UPLOAD_DIR, ensure_data_directories, get_settings
 from .ingest import append_to_index
 from .models import IngestionResponse, PresignedUploadRequest, PresignedUploadResponse, SourceUpsert, UploadResponse
+from .permissions import require_can_add_sources
 from .retrieval import reload_index
 from .stores import UploadRecord, UploadStore, upload_store
 
@@ -30,7 +31,11 @@ def _safe_filename(filename: str) -> str:
 
 
 @router.post("/upload", response_model=UploadResponse, response_model_exclude_none=True, status_code=status.HTTP_201_CREATED)
-async def upload(file: UploadFile = File(...), _: None = Depends(require_reviewer)) -> UploadResponse:
+async def upload(
+    file: UploadFile = File(...),
+    _: None = Depends(require_reviewer),
+    __: None = Depends(require_can_add_sources),
+) -> UploadResponse:
     try:
         filename = _safe_filename(file.filename or "")
     except ValueError as error:
@@ -60,7 +65,12 @@ async def upload(file: UploadFile = File(...), _: None = Depends(require_reviewe
 
 
 @router.put("/upload", response_model=UploadResponse, response_model_exclude_none=True, status_code=status.HTTP_201_CREATED)
-async def direct_upload(request: Request, filename: str, _: None = Depends(require_reviewer)) -> UploadResponse:
+async def direct_upload(
+    request: Request,
+    filename: str,
+    _: None = Depends(require_reviewer),
+    __: None = Depends(require_can_add_sources),
+) -> UploadResponse:
     try:
         safe_filename = _safe_filename(filename)
     except ValueError as error:
@@ -86,7 +96,12 @@ def _save_local_upload(filename: str, content: bytes) -> UploadResponse:
 
 
 @router.post("/uploads/presign", response_model=PresignedUploadResponse, response_model_exclude_none=True, status_code=status.HTTP_201_CREATED)
-async def presign_upload(payload: PresignedUploadRequest, request: Request, _: None = Depends(require_reviewer)) -> PresignedUploadResponse:
+async def presign_upload(
+    payload: PresignedUploadRequest,
+    request: Request,
+    _: None = Depends(require_reviewer),
+    __: None = Depends(require_can_add_sources),
+) -> PresignedUploadResponse:
     try:
         filename = _safe_filename(payload.filename)
     except ValueError as error:

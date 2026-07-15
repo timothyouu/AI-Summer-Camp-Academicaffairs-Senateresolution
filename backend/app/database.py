@@ -42,6 +42,15 @@ CREATE TABLE IF NOT EXISTS registry (
     passages INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS permissions (
+    user_email TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    can_add INTEGER NOT NULL DEFAULT 0,
+    can_edit INTEGER NOT NULL DEFAULT 0,
+    granted_by TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_email, source_type)
+);
 """
 
 

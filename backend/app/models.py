@@ -153,6 +153,18 @@ SourceType = Literal["handbook", "cba", "policystat", "catalog", "uploads"]
 SourceLifecycleStatus = Literal["active", "archived"]
 
 
+class PermissionUpdate(BaseModel):
+    user_email: str = Field(min_length=3, max_length=254)
+    source_type: SourceType
+    can_add: bool
+    can_edit: bool
+
+
+class PermissionRecord(PermissionUpdate):
+    granted_by: str = ""
+    updated_at: datetime
+
+
 class SourceUpsert(BaseModel):
     id: str = Field(min_length=1, max_length=200)
     title: str
