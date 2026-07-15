@@ -30,6 +30,18 @@ CREATE TABLE IF NOT EXISTS uploads (
     error TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS registry (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'archived',
+    canonical_url TEXT NOT NULL DEFAULT '',
+    edition_year INTEGER,
+    is_current INTEGER NOT NULL DEFAULT 1,
+    s3_key TEXT NOT NULL DEFAULT '',
+    passages INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

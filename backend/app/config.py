@@ -25,6 +25,9 @@ class Settings:
     bedrock_kb_id: str | None = None
     ddb_conflicts_table: str | None = None
     ddb_uploads_table: str | None = None
+    ddb_registry_table: str | None = None
+    ddb_permissions_table: str | None = None
+    ddb_drafts_table: str | None = None
     corpus_bucket: str | None = None
     cognito_user_pool_id: str | None = None
     cognito_client_id: str | None = None
@@ -42,6 +45,18 @@ class Settings:
         return bool(self.ddb_uploads_table)
 
     @property
+    def registry_aws(self) -> bool:
+        return bool(self.ddb_registry_table)
+
+    @property
+    def permissions_aws(self) -> bool:
+        return bool(self.ddb_permissions_table)
+
+    @property
+    def drafts_aws(self) -> bool:
+        return bool(self.ddb_drafts_table)
+
+    @property
     def corpus_aws(self) -> bool:
         return bool(self.corpus_bucket)
 
@@ -56,6 +71,8 @@ def get_settings() -> Settings:
     return Settings(
         aws_region=value("AWS_REGION"), bedrock_kb_id=value("BEDROCK_KB_ID"),
         ddb_conflicts_table=value("DDB_CONFLICTS_TABLE"), ddb_uploads_table=value("DDB_UPLOADS_TABLE"),
+        ddb_registry_table=value("DDB_REGISTRY_TABLE"), ddb_permissions_table=value("DDB_PERMISSIONS_TABLE"),
+        ddb_drafts_table=value("DDB_DRAFTS_TABLE"),
         corpus_bucket=value("CORPUS_BUCKET"), cognito_user_pool_id=value("COGNITO_USER_POOL_ID"),
         cognito_client_id=value("COGNITO_CLIENT_ID"),
     )

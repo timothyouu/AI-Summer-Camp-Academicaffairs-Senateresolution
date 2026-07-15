@@ -147,3 +147,27 @@ class HealthResponse(BaseModel):
     status: str
     index_chunks: int
     provider: str
+
+
+SourceType = Literal["handbook", "cba", "policystat", "catalog", "uploads"]
+SourceLifecycleStatus = Literal["active", "archived"]
+
+
+class SourceUpsert(BaseModel):
+    id: str = Field(min_length=1, max_length=200)
+    title: str
+    source_type: SourceType
+    status: SourceLifecycleStatus = "archived"
+    canonical_url: str = ""
+    edition_year: int | None = None
+    is_current: bool = True
+    s3_key: str = ""
+    passages: int = 0
+
+
+class SourceRecord(SourceUpsert):
+    updated_at: datetime
+
+
+class SourceStatusUpdate(BaseModel):
+    status: SourceLifecycleStatus

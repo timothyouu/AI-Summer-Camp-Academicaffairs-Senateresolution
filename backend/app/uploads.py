@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from .auth import require_reviewer
 from .config import MAX_UPLOAD_BYTES, UPLOAD_DIR, ensure_data_directories, get_settings
 from .ingest import append_to_index
-from .models import IngestionResponse, PresignedUploadRequest, PresignedUploadResponse, UploadResponse
+from .models import IngestionResponse, PresignedUploadRequest, PresignedUploadResponse, SourceUpsert, UploadResponse
 from .retrieval import reload_index
 from .stores import UploadRecord, UploadStore, upload_store
 
@@ -49,6 +49,11 @@ async def upload(file: UploadFile = File(...), _: None = Depends(require_reviewe
             ExpiresIn=900,
         )
         upload_store().register(filename, "pending", upload_id=upload_id)
+        from .registry import registry_store
+        registry_store().upsert(SourceUpsert(
+            id=Path(filename).stem.lower(), title=Path(filename).stem, source_type="uploads",
+            status="archived", s3_key=f"uploads/{upload_id}/{filename}",
+        ))
         return UploadResponse(filename=filename, status="pending", chunks_added=0, upload_url=str(url))
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     return _save_local_upload(filename, content)
@@ -75,6 +80,8 @@ def _save_local_upload(filename: str, content: bytes) -> UploadResponse:
     chunks_added = append_to_index(destination)
     reload_index()
     upload_store().register(filename, "ready", chunks_added, upload_id=filename)
+    from .registry import register_document
+    register_document(destination, status="archived", source_type="uploads", passages=chunks_added)
     return UploadResponse(filename=filename, status="ready", chunks_added=chunks_added)
 
 
@@ -90,6 +97,11 @@ async def presign_upload(payload: PresignedUploadRequest, request: Request, _: N
     if settings.corpus_aws:
         upload_id = str(uuid4())
         upload_store().register(filename, "pending", upload_id=upload_id)
+        from .registry import registry_store
+        registry_store().upsert(SourceUpsert(
+            id=Path(filename).stem.lower(), title=Path(filename).stem, source_type="uploads",
+            status="archived", s3_key=f"uploads/{upload_id}/{filename}",
+        ))
         import boto3  # type: ignore[import-not-found]
         upload_url = boto3.client("s3", region_name=settings.aws_region).generate_presigned_url(
             "put_object", Params={"Bucket": settings.corpus_bucket, "Key": f"uploads/{upload_id}/{filename}", "ContentType": payload.content_type}, ExpiresIn=900,
