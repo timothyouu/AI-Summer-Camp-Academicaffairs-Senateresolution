@@ -101,20 +101,22 @@ block of `infra/cdk.json` instead.
 
 ## Deploy — exact ordered commands
 
-Run from `infra/` unless noted. Assumes Tim has already run `aws configure`
+Start from the repository root. Assumes Tim has already run `aws configure`
 (or `aws sso login`) with an account that has Bedrock model access and
 OpenSearch Serverless enabled in the target region, and that **Docker is
 running** (required for Lambda dependency bundling — see the packaging
 note above).
 
 ```bash
-# 1. Python deps for CDK itself (Lambda deps are bundled automatically at synth)
+# 1. Activate the project virtualenv and install CDK's Python libraries.
+#    AWS_SETUP.md creates this uncommitted virtualenv on a fresh checkout.
+source backend/.venv/bin/activate
 pip install -r infra/requirements.txt
 
 # 2. Node CDK CLI, if not already installed globally
 npm install -g aws-cdk
 
-# 3. One-time per account/region
+# 3. One-time per account/region (the remaining commands run from infra/)
 cd infra
 export AWS_REGION=us-west-2   # or wherever Bedrock + OpenSearch Serverless are enabled
 cdk bootstrap aws://ACCOUNT_ID/us-west-2
@@ -136,11 +138,25 @@ Lambda roles, etc.) — approve them.
 
 ## Post-deploy steps (not expressible in CDK, or deferred to keep the demo scope tight)
 
-1. **Upload the corpus.** `aws s3 cp data/corpus s3://<CorpusBucketName>/ --recursive`
-   — keep the `handbook/`, `cba/`, `resolutions/`, `synthetic/` prefixes;
-   the data source's `inclusion_prefixes` matches those four plus `uploads/`
-   (where the presigned-URL upload flow in `backend/app/uploads.py` writes
-   new files for the live-ingestion demo step).
+1. **Upload the corpus from the repository root with the preparation helper.**
+   The checked-in `data/corpus/` is mostly flat, while the Bedrock data source
+   includes only `handbook/`, `cba/`, `resolutions/`, `synthetic/`, and
+   `uploads/`. A raw recursive copy to the bucket root will therefore not be
+   ingested. Use the explicit, fail-closed mapping instead:
+
+   ```bash
+   backend/.venv/bin/python infra/scripts/prepare_corpus.py
+   export CORPUS_BUCKET="$(aws cloudformation describe-stacks \
+     --stack-name PolicyIntelligenceStack \
+     --query "Stacks[0].Outputs[?OutputKey=='CorpusBucketName'].OutputValue | [0]" \
+     --output text)"
+   backend/.venv/bin/python infra/scripts/prepare_corpus.py --bucket "$CORPUS_BUCKET"
+   ```
+
+   The helper stages every declared source under an included prefix and writes
+   a Bedrock `<document>.metadata.json` sidecar with `source`, `section`,
+   `doc_type`, and `topic`. It refuses to proceed when a checked-in source is
+   missing or a new source has not been explicitly classified.
 2. **Run the initial KB sync** (ingestion Lambda only fires on *new* uploads
    after the stack exists; the corpus copied in step 1 needs one manual
    sync):
@@ -151,7 +167,19 @@ Lambda roles, etc.) — approve them.
    ```
    Verify with a console `retrieve` test for "service credit tenure clock"
    per implementation2.md §3 Phase A step 2.
-3. **Create the two demo users** (CloudFormation/CDK cannot set a Cognito
+3. **Seed the DynamoDB conflict log.** The seed script is AWS-aware through
+   `DDB_CONFLICTS_TABLE`; without this step the deployed table starts empty
+   because Lambda startup intentionally does not seed AWS storage:
+
+   ```bash
+   export AWS_REGION=us-west-2
+   export DDB_CONFLICTS_TABLE="$(aws cloudformation describe-stacks \
+     --stack-name PolicyIntelligenceStack \
+     --query "Stacks[0].Outputs[?OutputKey=='DdbConflictsTable'].OutputValue | [0]" \
+     --output text)"
+   backend/.venv/bin/python -m backend.scripts.seed_conflicts
+   ```
+4. **Create the two demo users** (CloudFormation/CDK cannot set a Cognito
    user's password — `AdminSetUserPassword` is an imperative API call, not a
    declarative resource):
    ```bash
@@ -172,7 +200,14 @@ Lambda roles, etc.) — approve them.
 
    # repeat with --group-name makers and a reviewer@example.edu username for the maker demo account
    ```
-4. **Redeploy with the deployed frontend origin** once the frontend is
+5. **Configure Amplify Hosting.** Connect the `prod` branch. The repository's
+   root `amplify.yml` selects `appRoot: frontend`, runs `npm ci` and
+   `npm run build`, and publishes `dist`. Set
+   `AMPLIFY_MONOREPO_APP_ROOT=frontend` in the Amplify environment along with
+   the documented `VITE_*` values. Under **Hosting > Rewrites and redirects**,
+   add `/<*>` → `/index.html` as `200 (Rewrite)` before any 404 rule. This is
+   required for direct React Router routes and Cognito's `/auth/callback`.
+6. **Redeploy with the deployed frontend origin** once the frontend is
    hosted (Amplify or otherwise):
    `cdk deploy -c frontendOrigin=https://<frontend-host>` — this registers
    `<origin>/auth/callback` as a Cognito callback URL and adds the origin
@@ -180,7 +215,7 @@ Lambda roles, etc.) — approve them.
    redirects" above). No console edits needed; localhost dev callbacks
    (`http://localhost:5173/auth/callback`, `:5174`) are registered from the
    first deploy.
-5. **Paste stack outputs into the backend's env** (or Lambda console env
+7. **Paste stack outputs into the backend's env** (or Lambda console env
    vars if editing directly) — see the Outputs table below for which var
    maps to which output.
 
@@ -196,7 +231,7 @@ Lambda roles, etc.) — approve them.
 | `DdbUploadsTable` | `DDB_UPLOADS_TABLE` | table name is literally `Uploads` |
 | `CognitoUserPoolId` | `COGNITO_USER_POOL_ID` | |
 | `CognitoClientId` | `COGNITO_CLIENT_ID` | SPA app client, no secret |
-| `CognitoHostedUiUrl` | `VITE_COGNITO_HOSTED_UI_URL` (frontend) | hosted UI domain for the `VITE_USE_COGNITO` flow (LOOP.md decision 5) |
+| `CognitoHostedUiUrl` | `VITE_COGNITO_DOMAIN` (frontend) | hosted UI domain for the `VITE_USE_COGNITO` flow (LOOP.md decision 5) |
 | `ApiUrl` | `VITE_API_BASE_URL` (frontend) | API Gateway HTTP API invoke URL |
 | `AgentFunctionUrl` | `VITE_AGENT_BASE_URL` (frontend) | Lambda Function URL for the two long-running agent endpoints (`POST /api/chat`, `POST /api/check-resolution`) — see note below |
 

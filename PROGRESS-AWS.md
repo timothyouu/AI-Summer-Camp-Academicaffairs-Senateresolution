@@ -16,3 +16,7 @@
 2026-07-15T07:12:10-07:00 review round-12 — ingesting-record preservation fixed (inline); JWT-500 finding verified false positive, pinned with 401 regression tests (51 pytest)
 2026-07-15T07:14:48-07:00 review round-13 fix hit (inline) — oversized uploads deleted from S3 before rejection + grant_delete (51 pytest)
 2026-07-15T07:17:46-07:00 review round-14 fix hit (inline) — AOSS index creation retries with backoff, provider timeout 10m
+2026-07-15T09:34:00-07:00 review round-15 codex-terra hit — Cognito direct-route role enforcement and reviewer-only conflict-log access; 52 pytest, tsc/build clean
+2026-07-15T09:34:00-07:00 review round-16 codex-sol hit — Strands extractor isolation, Cognito logout/role UX, and AWS handoff fixes; 53 pytest, tsc/build, infra py_compile, diff check clean
+2026-07-15T09:52:30-07:00 review round-17 codex-terra hit — corpus prefix/metadata staging, DynamoDB seeding, and Amplify monorepo/SPA handoff; infra helper tests and diff check clean
+2026-07-15T09:52:30-07:00 review round-18 codex-sol hit — authoritative grounded Strands outputs, shared Cognito role sync, terminal ingestion states, and combined Phase A-C gate; 57 pytest, 2 infra tests, tsc/build, py_compile, corpus dry-run, diff check clean
