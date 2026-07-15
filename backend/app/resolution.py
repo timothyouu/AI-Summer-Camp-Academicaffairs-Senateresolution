@@ -4,7 +4,7 @@ import re
 
 from fastapi import APIRouter, Depends
 
-from .agents import GroundedPassage, create_pipeline
+from .agents import GroundedPassage, create_pipeline, resolution_output
 from .auth import require_reviewer
 from .conflicts import create_or_get_conflict
 from .models import ConflictCreate, ResolutionFinding, ResolutionRequest, ResolutionResponse
@@ -21,8 +21,20 @@ def _finding(source: str, section: str, description: str) -> ResolutionFinding:
 @router.post("/check-resolution", response_model=ResolutionResponse)
 def check_resolution(payload: ResolutionRequest, _: None = Depends(require_reviewer)) -> ResolutionResponse:
     normalized = re.sub(r"\s+", " ", payload.text.lower())
+    pipeline = create_pipeline()
+    if pipeline.authoritative:
+        pipeline_result = pipeline.run(payload.text, draft=True)
+        output = resolution_output(pipeline_result)
+        return ResolutionResponse(
+            overlaps=[_finding(item.source, item.section, item.description) for item in output.overlaps],
+            duplicates=[_finding(item.source, item.section, item.description) for item in output.duplicates],
+            conflicts=[_finding(item.source, item.section, item.description) for item in output.conflicts],
+            recommendation=output.recommendation,
+            mode="agent-grounded",
+            agent_trace=pipeline_result.agent_trace,
+        )
     retrieved = search(payload.text, k=8)
-    pipeline_result = create_pipeline().run(
+    pipeline_result = pipeline.run(
         payload.text,
         draft=True,
         passages=[GroundedPassage(text=result.text, span=result.text, source=result.source, section=result.section, doc_type=result.doc_type, topic=result.topic, page=result.page) for result in retrieved],

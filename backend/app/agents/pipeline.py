@@ -11,7 +11,15 @@ from pydantic import ValidationError
 from ..models import AgentTraceStep, Citation, ConflictCreate
 from ..retrieval import SearchResult, search
 from ..stores import ConflictStore, conflict_store
-from .schemas import Claim, ConflictAnalysis, GroundedPassage, PipelineResult, VerifiedConflict
+from .schemas import (
+    Claim,
+    ConflictAnalysis,
+    GroundedPassage,
+    PipelineFinding,
+    PipelineResult,
+    ResolutionPipelineOutput,
+    VerifiedConflict,
+)
 from .verification import span_is_grounded
 
 
@@ -35,21 +43,29 @@ def _citation(index: int, passage: GroundedPassage) -> Citation:
 class AgentPipeline:
     """Six-stage pipeline. Extractor calls are source-isolated and may run concurrently."""
 
-    def __init__(self, llm: LLM | None = None, store: ConflictStore | None = None) -> None:
+    def __init__(
+        self, llm: LLM | None = None, store: ConflictStore | None = None, *, authoritative: bool = False,
+    ) -> None:
         self.llm = llm or ModuleLLM()
         self.store = store
+        self.authoritative = authoritative
 
     def run(self, topic: str, *, draft: bool = False, passages: list[GroundedPassage] | None = None) -> PipelineResult:
         trace = [AgentTraceStep(agent="orchestrator", label="Plan policy analysis", status="complete", detail=f"Planned {'resolution' if draft else 'question'} analysis for: {topic[:160]}")]
         grounded = passages if passages is not None else self._retrieve(topic)
         citations = [_citation(index, item) for index, item in enumerate(grounded, 1)]
         trace.append(AgentTraceStep(agent="retrieval", label="Retrieve grounded passages", status="complete" if grounded else "warning", detail=f"Retrieved {len(grounded)} verbatim passage(s)." if grounded else "No relevant passages; abstaining.", citations=citations or None))
-        claims = self._extract_blind(grounded)
-        trace.append(AgentTraceStep(agent="extractor", label="Extract source claims independently", status="complete" if claims else "warning", detail=f"Extracted {len(claims)} grounded normative claim(s) from {len({item.source for item in grounded})} isolated source context(s)."))
+        analysis_passages = list(grounded)
+        if draft:
+            analysis_passages.insert(0, GroundedPassage(
+                text=topic, span=topic, source="Submitted draft", section="Draft", topic="resolution draft",
+            ))
+        claims = self._extract_blind(analysis_passages)
+        trace.append(AgentTraceStep(agent="extractor", label="Extract source claims independently", status="complete" if claims else "warning", detail=f"Extracted {len(claims)} grounded normative claim(s) from {len({item.source for item in analysis_passages})} isolated source context(s)."))
         analyses = self._detect(topic, claims, draft=draft)
         contradictions = [item for item in analyses if item.classification == "contradiction"]
         trace.append(AgentTraceStep(agent="conflict", label="Compare same-topic claims", status="warning" if contradictions else "complete", detail=self._analysis_detail(analyses)))
-        verified = [self._verify(item, grounded) for item in contradictions]
+        verified = [self._verify(item, analysis_passages) for item in contradictions]
         accepted = [item for item in verified if item.accepted]
         trace.append(AgentTraceStep(agent="verifier", label="Verify quotes and adjudicate context", status="warning" if contradictions and not accepted else "complete", detail=f"Accepted {len(accepted)} of {len(contradictions)} candidate conflict(s); ungrounded claims were rejected."))
         escalation = ESCALATION if accepted or (contradictions and not accepted) else None
@@ -111,9 +127,25 @@ class AgentPipeline:
         try:
             raw = self.llm.generate("Compare only claims on the supplied topic. Return a JSON array using classification agreement|redundant_overlap|contradiction|gap and typology direct_contradiction|numeric_mismatch|scope_overlap|cba_vs_handbook_jurisdiction|none. Include claim_a and claim_b verbatim. Never choose a winner; abstain when uncertain.", json.dumps(prompt), json_mode=True)
             values = json.loads(raw)
-            return [ConflictAnalysis.model_validate(value) for value in values] if isinstance(values, list) else []
+            analyses = [ConflictAnalysis.model_validate(value) for value in values] if isinstance(values, list) else []
+            grounded_analyses = [item for item in analyses if self._analysis_uses_grounded_claims(item, claims)]
+            return grounded_analyses or [ConflictAnalysis(
+                classification="gap", topic=topic,
+                explanation="Detector returned no grounded cross-source claim pair; abstaining.", abstained=True,
+            )]
         except (RuntimeError, ValueError, TypeError, json.JSONDecodeError, ValidationError):
             return self._deterministic_compare(topic, claims)
+
+    @staticmethod
+    def _analysis_uses_grounded_claims(analysis: ConflictAnalysis, claims: list[Claim]) -> bool:
+        if analysis.classification == "gap":
+            return analysis.claim_a is None and analysis.claim_b is None
+        if analysis.claim_a is None or analysis.claim_b is None:
+            return False
+        known = {json.dumps(item.model_dump(), sort_keys=True) for item in claims}
+        first = json.dumps(analysis.claim_a.model_dump(), sort_keys=True)
+        second = json.dumps(analysis.claim_b.model_dump(), sort_keys=True)
+        return first in known and second in known and first != second and analysis.claim_a.source != analysis.claim_b.source
 
     @staticmethod
     def _deterministic_compare(topic: str, claims: list[Claim]) -> list[ConflictAnalysis]:
@@ -165,3 +197,67 @@ class AgentPipeline:
     def _analysis_detail(analyses: list[ConflictAnalysis]) -> str:
         counts = {kind: sum(item.classification == kind for item in analyses) for kind in ("agreement", "redundant_overlap", "contradiction", "gap")}
         return ", ".join(f"{value} {kind.replace('_', ' ')}" for kind, value in counts.items() if value) or "No comparable claims; abstaining."
+
+
+def resolution_output(result: PipelineResult) -> ResolutionPipelineOutput:
+    """Map grounded draft-vs-policy analyses into the resolution API contract."""
+    overlaps: list[PipelineFinding] = []
+    duplicates: list[PipelineFinding] = []
+    conflicts: list[PipelineFinding] = []
+    accepted = {
+        json.dumps(item.analysis.model_dump(), sort_keys=True)
+        for item in result.verified_conflicts if item.accepted
+    }
+
+    for analysis in result.analyses:
+        claims = (analysis.claim_a, analysis.claim_b)
+        if any(item is None for item in claims):
+            continue
+        first, second = claims
+        assert first is not None and second is not None
+        if first.source == "Submitted draft":
+            policy_claim = second
+        elif second.source == "Submitted draft":
+            policy_claim = first
+        else:
+            continue
+        finding = PipelineFinding(
+            source=policy_claim.source,
+            section=policy_claim.section,
+            description=policy_claim.citation_span,
+        )
+        if analysis.classification == "agreement":
+            overlaps.append(finding)
+        elif analysis.classification == "redundant_overlap":
+            duplicates.append(finding)
+        elif (
+            analysis.classification == "contradiction"
+            and json.dumps(analysis.model_dump(), sort_keys=True) in accepted
+        ):
+            conflicts.append(finding)
+
+    overlaps = _unique_findings(overlaps)
+    duplicates = _unique_findings(duplicates)
+    conflicts = _unique_findings(conflicts)
+    if conflicts:
+        recommendation = result.escalation or ESCALATION
+    elif duplicates:
+        recommendation = "The draft may duplicate grounded policy language. Review the cited source and amend existing policy where appropriate."
+    elif overlaps:
+        recommendation = "The draft overlaps grounded policy language. Reconcile it with the cited source before advancing."
+    else:
+        recommendation = "The agent pipeline found no verified draft-to-policy relationship. Review the cited corpus manually; no policy determination was made."
+    return ResolutionPipelineOutput(
+        overlaps=overlaps,
+        duplicates=duplicates,
+        conflicts=conflicts,
+        recommendation=recommendation,
+        abstained=not (overlaps or duplicates or conflicts),
+    )
+
+
+def _unique_findings(findings: list[PipelineFinding]) -> list[PipelineFinding]:
+    unique: dict[tuple[str, str, str], PipelineFinding] = {}
+    for finding in findings:
+        unique[(finding.source, finding.section, finding.description)] = finding
+    return list(unique.values())

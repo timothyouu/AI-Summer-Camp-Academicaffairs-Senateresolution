@@ -168,16 +168,24 @@ def _refresh_aws_ingestion_status(
         dataSourceId=data_source_id,
         ingestionJobId=record.ingestion_job_id,
     )
-    bedrock_status = str(response.get("ingestionJob", {}).get("status", ""))
-    mapped_status = {"COMPLETE": "ready", "FAILED": "failed"}.get(bedrock_status, "ingesting")
+    job = response.get("ingestionJob", {})
+    bedrock_status = str(job.get("status", ""))
+    mapped_status = {"COMPLETE": "ready", "FAILED": "failed", "STOPPED": "failed"}.get(
+        bedrock_status, "ingesting",
+    )
     if mapped_status != "ingesting":
+        reasons = job.get("failureReasons", [])
+        error = None
+        if mapped_status == "failed":
+            detail = "; ".join(str(reason) for reason in reasons if reason)
+            error = detail or f"Bedrock ingestion job ended with status {bedrock_status or 'UNKNOWN'}"
         store.register(
             record.filename, mapped_status, record.chunks_added,
-            upload_id=record.upload_id, ingestion_job_id=record.ingestion_job_id,
+            upload_id=record.upload_id, ingestion_job_id=record.ingestion_job_id, error=error,
         )
         return UploadRecord(
             upload_id=record.upload_id, filename=record.filename, status=mapped_status,
-            chunks_added=record.chunks_added, ingestion_job_id=record.ingestion_job_id,
+            chunks_added=record.chunks_added, ingestion_job_id=record.ingestion_job_id, error=error,
         )
     return record
 

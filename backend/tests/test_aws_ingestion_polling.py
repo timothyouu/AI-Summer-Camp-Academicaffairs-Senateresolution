@@ -97,9 +97,17 @@ def test_pending_upload_poll_nonrecoverable_error_is_failed(monkeypatch: Any) ->
     assert store.calls == [{"status": "failed", "error": "data source unavailable"}]
 
 
-@pytest.mark.parametrize(("bedrock_status", "expected_status"), [("COMPLETE", "ready"), ("FAILED", "failed")])
+@pytest.mark.parametrize(
+    ("bedrock_status", "failure_reasons", "expected_status", "expected_error"),
+    [
+        ("COMPLETE", [], "ready", None),
+        ("FAILED", ["The source document could not be parsed."], "failed", "The source document could not be parsed."),
+        ("STOPPED", [], "failed", "Bedrock ingestion job ended with status STOPPED"),
+    ],
+)
 def test_aws_ingestion_polling_persists_terminal_status(
-    monkeypatch: Any, bedrock_status: str, expected_status: str,
+    monkeypatch: Any, bedrock_status: str, failure_reasons: list[str],
+    expected_status: str, expected_error: str | None,
 ) -> None:
     class Store:
         def __init__(self) -> None:
@@ -114,11 +122,11 @@ def test_aws_ingestion_polling_persists_terminal_status(
 
         def register(
             self, filename: str, status: str, chunks_added: int = 0, upload_id: str | None = None,
-            ingestion_job_id: str | None = None,
+            ingestion_job_id: str | None = None, error: str | None = None,
         ) -> str:
             self.register_calls.append({
                 "filename": filename, "status": status, "chunks_added": chunks_added,
-                "upload_id": upload_id, "ingestion_job_id": ingestion_job_id,
+                "upload_id": upload_id, "ingestion_job_id": ingestion_job_id, "error": error,
             })
             return upload_id or filename
 
@@ -131,7 +139,7 @@ def test_aws_ingestion_polling_persists_terminal_status(
             assert kwargs == {
                 "knowledgeBaseId": "kb-123", "dataSourceId": "source-123", "ingestionJobId": "job-123",
             }
-            return {"ingestionJob": {"status": bedrock_status}}
+            return {"ingestionJob": {"status": bedrock_status, "failureReasons": failure_reasons}}
 
     store = Store()
     monkeypatch.setenv("AWS_REGION", "us-west-2")
@@ -143,7 +151,8 @@ def test_aws_ingestion_polling_persists_terminal_status(
     response = asyncio.run(uploads.ingestion_status("handbook.pdf"))
 
     assert response.status == expected_status
+    assert response.error == expected_error
     assert store.register_calls == [{
         "filename": "handbook.pdf", "status": expected_status, "chunks_added": 0,
-        "upload_id": "handbook.pdf", "ingestion_job_id": "job-123",
+        "upload_id": "handbook.pdf", "ingestion_job_id": "job-123", "error": expected_error,
     }]

@@ -53,7 +53,7 @@ class ChatResponse(BaseModel):
     answer: str
     citations: list[Citation]
     conflict: ConflictSignal | None = None
-    mode: Literal["local-index", "calibrated-static"] = "local-index"
+    mode: Literal["local-index", "calibrated-static", "agent-grounded"] = "local-index"
     agent_trace: list[AgentTraceStep] = Field(default_factory=list)
 
 
@@ -72,7 +72,7 @@ class ResolutionResponse(BaseModel):
     duplicates: list[ResolutionFinding] = Field(default_factory=list)
     conflicts: list[ResolutionFinding] = Field(default_factory=list)
     recommendation: str
-    mode: Literal["local-index", "calibrated-static"] = "local-index"
+    mode: Literal["local-index", "calibrated-static", "agent-grounded"] = "local-index"
     agent_trace: list[AgentTraceStep] = Field(default_factory=list)
 
 

@@ -13,16 +13,23 @@ def strands_available() -> bool:
 
 
 class StrandsLLM:
-    """Lazy Strands adapter; no SDK or AWS import occurs in local mode."""
+    """Lazy Strands adapter; no SDK or AWS import occurs in local mode.
+
+    A new SDK agent is created for every generation. Strands agents retain
+    conversation state and reject concurrent calls by default, while the
+    pipeline deliberately runs blind per-source extractors in parallel. Fresh
+    instances keep those extractor contexts isolated and avoid sharing mutable
+    agent history between pipeline roles.
+    """
 
     def __init__(self) -> None:
         module = importlib.import_module("strands")
-        agent_type = getattr(module, "Agent")
-        self._agent: Any = agent_type(system_prompt="Return only the requested structured JSON. Ground every policy claim in supplied text.")
+        self._agent_type: Any = getattr(module, "Agent")
 
     def generate(self, system: str, user: str, json_mode: bool = False) -> str:
         del json_mode
-        result = self._agent(f"{system}\n\nINPUT:\n{user}")
+        agent: Any = self._agent_type(system_prompt=system)
+        result = agent(user)
         return _message_text(getattr(result, "message", result))
 
 
@@ -47,5 +54,5 @@ def create_pipeline(*, llm: LLM | None = None) -> AgentPipeline:
     if llm is not None:
         return AgentPipeline(llm=llm)
     if get_settings().retrieval_aws and strands_available():
-        return AgentPipeline(llm=StrandsLLM())
+        return AgentPipeline(llm=StrandsLLM(), authoritative=True)
     return AgentPipeline()

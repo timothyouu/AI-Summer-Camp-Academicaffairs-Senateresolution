@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends
 
-from .agents import GroundedPassage, create_pipeline
+from .agents import GroundedPassage, PipelineResult, create_pipeline
 from .auth import require_authenticated
 from .conflicts import create_or_get_conflict
 from .models import ChatRequest, ChatResponse, Citation, ConflictCreate, ConflictSignal
@@ -115,12 +115,53 @@ def _local_index_answer(results: list[SearchResult]) -> ChatResponse:
     )
 
 
+def _agent_grounded_answer(result: PipelineResult) -> ChatResponse:
+    claims = result.claims[:6]
+    citations = [
+        Citation(id=index, source=claim.source, section=claim.section, excerpt=claim.citation_span)
+        for index, claim in enumerate(claims, start=1)
+        if claim.source != "Submitted draft"
+    ]
+    accepted = [item for item in result.verified_conflicts if item.accepted]
+    if claims:
+        statements = "\n\n".join(
+            f"{claim.citation_span} ({claim.source}, {claim.section})"
+            for claim in claims if claim.source != "Submitted draft"
+        )
+        answer = f"The agent pipeline verified these grounded policy statements:\n\n{statements}"
+    else:
+        answer = "The agent pipeline could not extract a grounded policy claim from the retrieved passages, so it abstained."
+    signal: ConflictSignal | None = None
+    if accepted:
+        sources = sorted({
+            claim.source
+            for item in accepted
+            for claim in (item.analysis.claim_a, item.analysis.claim_b)
+            if claim is not None
+        })
+        guidance = result.escalation or "Multiple grounded answers require human policy review."
+        signal = ConflictSignal(detected=True, sources=sources, guidance=guidance)
+        answer = f"{answer}\n\n{guidance}"
+    elif result.abstained and result.escalation:
+        answer = f"{answer}\n\n{result.escalation}"
+    return ChatResponse(
+        answer=answer,
+        citations=citations,
+        conflict=signal,
+        mode="agent-grounded",
+        agent_trace=result.agent_trace,
+    )
+
+
 @router.post("/chat", response_model=ChatResponse)
 def chat(payload: ChatRequest, _: None = Depends(require_authenticated)) -> ChatResponse:
+    pipeline = create_pipeline()
+    if pipeline.authoritative:
+        return _agent_grounded_answer(pipeline.run(payload.question))
     fixture = _calibrated(payload.question)
     if fixture is None:
         return _local_index_answer(search(payload.question, k=6))
-    pipeline_result = create_pipeline().run(
+    pipeline_result = pipeline.run(
         payload.question,
         passages=[GroundedPassage(text=excerpt, span=excerpt, source=source, section=section, topic=payload.question) for source, section, excerpt in fixture.citations],
     )

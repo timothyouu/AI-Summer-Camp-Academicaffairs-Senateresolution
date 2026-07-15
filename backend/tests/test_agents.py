@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from threading import Lock
+from types import SimpleNamespace
+from typing import Any
 
 from backend.app.agents import AgentPipeline, Claim, ConflictAnalysis, GroundedPassage, span_is_grounded
 
@@ -102,3 +105,28 @@ def test_strands_message_text_extraction() -> None:
     assert _message_text(structured) == '{"claims": []}'
     assert _message_text('{"ok": true}') == '{"ok": true}'
     assert _message_text({"role": "assistant", "content": []}) == str({"role": "assistant", "content": []})
+
+
+def test_strands_adapter_uses_fresh_agent_and_prompt_for_each_invocation(monkeypatch: Any) -> None:
+    from backend.app.agents.factory import StrandsLLM
+
+    created: list[dict[str, str]] = []
+
+    class FakeAgent:
+        def __init__(self, *, system_prompt: str) -> None:
+            self.system_prompt = system_prompt
+            created.append({"system": system_prompt, "user": ""})
+
+        def __call__(self, user: str) -> dict[str, object]:
+            created[-1]["user"] = user
+            return {"role": "assistant", "content": [{"text": "[]"}]}
+
+    monkeypatch.setitem(sys.modules, "strands", SimpleNamespace(Agent=FakeAgent))
+    llm = StrandsLLM()
+
+    assert llm.generate("extract source A", "source A", json_mode=True) == "[]"
+    assert llm.generate("extract source B", "source B", json_mode=True) == "[]"
+    assert created == [
+        {"system": "extract source A", "user": "source A"},
+        {"system": "extract source B", "user": "source B"},
+    ]

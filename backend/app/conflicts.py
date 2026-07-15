@@ -29,7 +29,7 @@ def seed_demo_conflicts() -> list[ConflictRecord]:
 
 
 @router.get("", response_model=list[ConflictRecord])
-def get_conflicts() -> list[ConflictRecord]:
+def get_conflicts(_: None = Depends(require_reviewer)) -> list[ConflictRecord]:
     return list_conflicts()
 
 

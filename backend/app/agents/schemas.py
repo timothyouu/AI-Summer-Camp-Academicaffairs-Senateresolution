@@ -63,3 +63,17 @@ class PipelineResult(BaseModel):
     abstained: bool = False
     escalation: str | None = None
     agent_trace: list[AgentTraceStep] = Field(default_factory=list)
+
+
+class PipelineFinding(BaseModel):
+    source: str
+    section: str
+    description: str
+
+
+class ResolutionPipelineOutput(BaseModel):
+    overlaps: list[PipelineFinding] = Field(default_factory=list)
+    duplicates: list[PipelineFinding] = Field(default_factory=list)
+    conflicts: list[PipelineFinding] = Field(default_factory=list)
+    recommendation: str
+    abstained: bool = False

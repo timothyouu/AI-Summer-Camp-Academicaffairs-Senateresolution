@@ -78,3 +78,15 @@ def test_cognito_middleware_guards_all_api_routes(client: TestClient, monkeypatc
     assert client.get("/api/topics").status_code == 401
     assert client.get("/api/uploads/some-id").status_code == 401
     assert client.get("/api/health").status_code == 200
+
+
+def test_cognito_employee_cannot_read_conflict_log(client: TestClient, monkeypatch: Any) -> None:
+    from backend.app import auth
+
+    monkeypatch.setenv("COGNITO_USER_POOL_ID", "us-west-2_pool")
+    monkeypatch.setenv("COGNITO_CLIENT_ID", "client")
+    monkeypatch.setattr(auth, "decode_and_verify_token", lambda _token, _settings: {"cognito:groups": ["employees"]})
+
+    response = client.get("/api/conflicts", headers={"Authorization": "Bearer employee-token"})
+
+    assert response.status_code == 403
