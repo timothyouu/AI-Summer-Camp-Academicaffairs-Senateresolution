@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 from fastapi import APIRouter, HTTPException, status
 
-from .database import connection
 from .models import ConflictCreate, ConflictRecord, ConflictUpdate
+from .stores import conflict_store
 
 
 router = APIRouter(prefix="/api/conflicts", tags=["conflicts"])
@@ -17,44 +15,12 @@ DEMO_CONFLICTS = (
 )
 
 
-def _record(row: object) -> ConflictRecord:
-    values = dict(row)  # type: ignore[arg-type]
-    return ConflictRecord(
-        id=int(values["id"]),
-        source_a=str(values["source_a"]),
-        source_b=str(values["source_b"]),
-        topic=str(values["topic"]),
-        description=str(values["description"]),
-        status=str(values["status"]),
-        resolution_note=str(values["resolution_note"]),
-        created_at=datetime.fromisoformat(str(values["created_at"])),
-        updated_at=datetime.fromisoformat(str(values["updated_at"])),
-    )
-
-
 def list_conflicts() -> list[ConflictRecord]:
-    with connection() as database:
-        rows = database.execute("SELECT * FROM conflicts ORDER BY updated_at DESC, id DESC").fetchall()
-    return [_record(row) for row in rows]
+    return conflict_store().list()
 
 
 def create_or_get_conflict(payload: ConflictCreate) -> ConflictRecord:
-    with connection() as database:
-        database.execute(
-            """
-            INSERT OR IGNORE INTO conflicts(source_a, source_b, topic, description, status)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (payload.source_a, payload.source_b, payload.topic, payload.description, payload.status),
-        )
-        row = database.execute(
-            """SELECT * FROM conflicts
-            WHERE source_a = ? AND source_b = ? AND topic = ? AND description = ?""",
-            (payload.source_a, payload.source_b, payload.topic, payload.description),
-        ).fetchone()
-    if row is None:
-        raise RuntimeError("Conflict insert did not return a record")
-    return _record(row)
+    return conflict_store().create_or_get(payload)
 
 
 def seed_demo_conflicts() -> list[ConflictRecord]:
@@ -73,13 +39,7 @@ def create_conflict(payload: ConflictCreate) -> ConflictRecord:
 
 @router.patch("/{conflict_id}", response_model=ConflictRecord)
 def update_conflict(conflict_id: int, payload: ConflictUpdate) -> ConflictRecord:
-    with connection() as database:
-        database.execute(
-            """UPDATE conflicts SET status = ?, resolution_note = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?""",
-            (payload.status, payload.resolution_note.strip(), conflict_id),
-        )
-        row = database.execute("SELECT * FROM conflicts WHERE id = ?", (conflict_id,)).fetchone()
-    if row is None:
+    record = conflict_store().update(conflict_id, payload)
+    if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conflict not found")
-    return _record(row)
+    return record

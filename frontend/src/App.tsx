@@ -9,6 +9,7 @@ import ConflictReview from "./pages/ConflictReview";
 import Drafts from "./pages/Drafts";
 import Library from "./pages/Library";
 import Login from "./pages/Login";
+import AuthCallback from "./pages/AuthCallback";
 import ReviewOverview from "./pages/ReviewOverview";
 import ReviewResults from "./pages/ReviewResults";
 import Sources from "./pages/Sources";
@@ -36,6 +37,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/" element={<Navigate to="/login" replace />} />
       <Route path="/login" element={<Login />} />
+      <Route path="/auth/callback" element={<AuthCallback />} />
       <Route path="/chats" element={<SharedRoute><Chats /></SharedRoute>} />
       <Route path="/chats/:conversationId" element={<SharedRoute><ChatAnswer /></SharedRoute>} />
       <Route path="/library" element={<SharedRoute><Library /></SharedRoute>} />

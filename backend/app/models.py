@@ -105,6 +105,7 @@ class UploadResponse(BaseModel):
     filename: str
     status: str
     chunks_added: int
+    upload_url: str | None = None
 
 
 class HealthResponse(BaseModel):

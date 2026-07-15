@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import auth, chat, conflicts, resolution, topics, uploads
-from .config import CORPUS_DIR, ensure_data_directories
+from .config import CORPUS_DIR, ensure_data_directories, get_settings
 from .conflicts import seed_demo_conflicts
 from .database import initialize_database
 from .ingest import build_index, discover_corpus_files
@@ -18,11 +18,13 @@ from .retrieval import INDEX, reload_index
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    settings = get_settings()
     ensure_data_directories()
     initialize_database()
-    seed_demo_conflicts()
+    if not settings.conflicts_aws:
+        seed_demo_conflicts()
     reload_index()
-    if INDEX.size == 0:
+    if not settings.retrieval_aws and INDEX.size == 0:
         files = discover_corpus_files(CORPUS_DIR)
         if files:
             build_index(files)

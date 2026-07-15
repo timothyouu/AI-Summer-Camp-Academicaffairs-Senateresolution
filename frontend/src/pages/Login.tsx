@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { login } from "../api";
+import { cognitoEnabled, startCognitoLogin } from "../auth/cognito";
 import Logo from "../components/Logo";
 import type { Role } from "../data/mock";
 import { useRole } from "../state/role";
@@ -110,6 +111,8 @@ export default function Login() {
             <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="h-9 w-9"><path d="M4 16h23M19 8l8 8-8 8" /></svg>
           </button>
         </div>
+
+        {cognitoEnabled && <button type="button" onClick={() => void startCognitoLogin().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Unable to start CSUB SSO sign-in."))} className="mt-5 rounded-lg bg-navy px-6 py-3 text-sm font-semibold text-white shadow-card hover:bg-navy-deep">Sign in with CSUB SSO</button>}
 
         <p className="mt-10 text-center text-[18px] tracking-[-0.025em]">Ask questions, browse trusted policy, and verify guidance.</p>
         {error && <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-5 py-3 text-red-800">{error}</p>}
