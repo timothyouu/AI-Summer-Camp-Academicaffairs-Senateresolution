@@ -77,9 +77,14 @@ interface BackendIngestionResponse { upload_id: string; status: IngestionStatus;
 interface BackendTopicSummary { name: string; count: number; }
 interface BackendTopicDetail { name: string; chunks: Array<{ source: string; section: string; excerpt: string }>; }
 
-const backendRequest = async <T>(path: string, init?: RequestInit): Promise<T | null> => {
+// Bedrock-backed endpoints (chat, resolution checks) run retrieval plus a
+// multi-agent LLM pipeline server-side and routinely exceed a few seconds.
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+const AGENT_REQUEST_TIMEOUT_MS = 120_000;
+
+const backendRequest = async <T>(path: string, init?: RequestInit, timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS): Promise<T | null> => {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 4_000);
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const authorizationToken = await getCognitoAuthorizationToken();
     const headers = new Headers(init?.headers);
@@ -209,7 +214,7 @@ export async function askQuestion(text: string): Promise<Answer> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question }),
-  });
+  }, AGENT_REQUEST_TIMEOUT_MS);
   if (backend !== null) {
     const paragraphs = backend.answer.split(/\n\s*\n/).filter(Boolean);
     return {
@@ -510,7 +515,7 @@ export async function checkResolution(text: string): Promise<ReviewAnalysis> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
-  });
+  }, AGENT_REQUEST_TIMEOUT_MS);
   if (backend !== null) {
     const findings = [
       ...backend.overlaps.map((finding) => ({ type: "Overlap" as const, source: `${finding.source} • ${finding.section}` })),

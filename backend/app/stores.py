@@ -68,8 +68,17 @@ class DynamoDBConflictStore:
         self.table = settings.ddb_conflicts_table
 
     def list(self) -> list[ConflictRecord]:
-        response = self.client.scan(TableName=self.table)  # type: ignore[attr-defined]
-        records = [_conflict(_ddb_decode(item)) for item in response.get("Items", [])]
+        records: list[ConflictRecord] = []
+        start_key: dict[str, object] | None = None
+        while True:
+            kwargs: dict[str, object] = {"TableName": self.table}
+            if start_key is not None:
+                kwargs["ExclusiveStartKey"] = start_key
+            response = self.client.scan(**kwargs)  # type: ignore[attr-defined]
+            records.extend(_conflict(_ddb_decode(item)) for item in response.get("Items", []))
+            start_key = response.get("LastEvaluatedKey")
+            if not start_key:
+                break
         return sorted(records, key=lambda value: (value.updated_at, value.id), reverse=True)
 
     def create_or_get(self, payload: ConflictCreate) -> ConflictRecord:

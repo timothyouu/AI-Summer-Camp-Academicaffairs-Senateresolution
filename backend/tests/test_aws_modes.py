@@ -82,6 +82,35 @@ def test_dynamodb_conflict_ids_use_string_partition_keys(monkeypatch: Any) -> No
     assert store.client.update_keys == [{"id": {"S": str(created.id)}}]  # type: ignore[attr-defined]
 
 
+def test_dynamodb_conflict_list_paginates_scans(monkeypatch: Any) -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.items: list[dict[str, object]] = []
+            self.scan_calls: list[dict[str, object]] = []
+
+        def put_item(self, **kwargs: object) -> dict[str, object]:
+            self.items.append(dict(kwargs["Item"]))  # type: ignore[index]
+            return {}
+
+        def get_item(self, **_: object) -> dict[str, object]:
+            return {}
+
+        def scan(self, **kwargs: object) -> dict[str, object]:
+            self.scan_calls.append(kwargs)
+            if "ExclusiveStartKey" not in kwargs:
+                return {"Items": [self.items[0]], "LastEvaluatedKey": {"id": self.items[0]["id"]}}
+            return {"Items": [self.items[1]]}
+
+    monkeypatch.setenv("DDB_CONFLICTS_TABLE", "ConflictLog")
+    store = DynamoDBConflictStore(Client())
+    store.create_or_get(ConflictCreate(source_a="A", source_b="B", topic="T1", description="D1"))
+    store.create_or_get(ConflictCreate(source_a="C", source_b="D", topic="T2", description="D2"))
+    records = store.list()
+    assert len(records) == 2
+    assert len(store.client.scan_calls) == 2  # type: ignore[attr-defined]
+    assert "ExclusiveStartKey" in store.client.scan_calls[1]  # type: ignore[attr-defined]
+
+
 def test_cognito_group_role_mapping() -> None:
     assert role_from_claims({"cognito:groups": ["makers"]}) == "reviewer"
     assert role_from_claims({"cognito:groups": ["employees"]}) == "employee"
