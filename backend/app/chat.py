@@ -1,18 +1,66 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from urllib.error import URLError
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header
 
 from .agents import GroundedPassage, PipelineResult, create_pipeline
-from .auth import require_authenticated
+from .agents.pipeline import ESCALATION
+from .auth import decode_and_verify_token, require_authenticated, role_from_claims
+from .config import get_settings
 from .conflicts import create_or_get_conflict
-from .models import ChatRequest, ChatResponse, Citation, ConflictCreate, ConflictSignal
+from .models import ChatRequest, ChatResponse, Citation, ConflictCreate, ConflictSignal, Role
 from .retrieval import SearchResult, search
 
 
 router = APIRouter(prefix="/api", tags=["chat"])
+
+
+EMPLOYEE_CONFLICT_GUIDANCE = (
+    "More than one official source addresses this topic and they do not fully agree. "
+    "For guidance that applies to your situation, contact your dean or the Provost's office."
+)
+
+
+def resolve_request_role(authorization: str | None, x_role: str | None) -> Role:
+    """Cognito claims are authoritative when configured; otherwise trust the demo header.
+
+    The local default is 'reviewer' so existing header-less calls (tests, curl,
+    the pre-gating frontend) keep today's full-detail behavior.
+    """
+    settings = get_settings()
+    if settings.cognito_aws and authorization and authorization.startswith("Bearer "):
+        try:
+            return role_from_claims(decode_and_verify_token(authorization.removeprefix("Bearer ").strip(), settings))
+        except (ValueError, URLError, KeyError, json.JSONDecodeError):
+            return "employee"
+    return "employee" if x_role == "employee" else "reviewer"
+
+
+def shape_response_for_role(response: ChatResponse, role: Role) -> ChatResponse:
+    """Employees get an escalation-oriented message instead of raw conflict detail."""
+    if role != "employee" or response.conflict is None or not response.conflict.detected:
+        return response
+    answer = response.answer.replace(f"\n\n{ESCALATION}", "").replace(f"\n\n{response.conflict.guidance}", "")
+    trace = [
+        step.model_copy(update={"detail": EMPLOYEE_CONFLICT_GUIDANCE})
+        if step.agent == "escalation" and step.status == "warning"
+        else step
+        for step in response.agent_trace
+    ]
+    return response.model_copy(update={
+        "answer": answer,
+        "conflict": ConflictSignal(
+            detected=True,
+            sources=[],
+            guidance=EMPLOYEE_CONFLICT_GUIDANCE,
+            conflict_id=None,
+        ),
+        "agent_trace": trace,
+    })
 
 
 @dataclass(frozen=True)
@@ -154,13 +202,19 @@ def _agent_grounded_answer(result: PipelineResult) -> ChatResponse:
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(payload: ChatRequest, _: None = Depends(require_authenticated)) -> ChatResponse:
+def chat(
+    payload: ChatRequest,
+    authorization: str | None = Header(default=None),
+    x_role: str | None = Header(default=None),
+    _: None = Depends(require_authenticated),
+) -> ChatResponse:
+    role = resolve_request_role(authorization, x_role)
     pipeline = create_pipeline()
     if pipeline.authoritative:
-        return _agent_grounded_answer(pipeline.run(payload.question))
+        return shape_response_for_role(_agent_grounded_answer(pipeline.run(payload.question)), role)
     fixture = _calibrated(payload.question)
     if fixture is None:
-        return _local_index_answer(search(payload.question, k=6))
+        return shape_response_for_role(_local_index_answer(search(payload.question, k=6)), role)
     pipeline_result = pipeline.run(
         payload.question,
         passages=[GroundedPassage(text=excerpt, span=excerpt, source=source, section=section, topic=payload.question) for source, section, excerpt in fixture.citations],
@@ -175,4 +229,13 @@ def chat(payload: ChatRequest, _: None = Depends(require_authenticated)) -> Chat
             guidance="Review the later source's adoption/effective status and consult Faculty Affairs before relying on superseded wording.",
             conflict_id=record.id,
         )
-    return ChatResponse(answer=fixture.answer, citations=_citations(fixture.citations), conflict=signal, mode="calibrated-static", agent_trace=pipeline_result.agent_trace)
+    return shape_response_for_role(
+        ChatResponse(
+            answer=fixture.answer,
+            citations=_citations(fixture.citations),
+            conflict=signal,
+            mode="calibrated-static",
+            agent_trace=pipeline_result.agent_trace,
+        ),
+        role,
+    )
