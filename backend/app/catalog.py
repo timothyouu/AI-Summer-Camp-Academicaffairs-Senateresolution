@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -165,6 +166,28 @@ def _slug(title: str, edition_year: int, index: int) -> str:
     return f"catalog-{edition_year}-{base}"
 
 
+def _bedrock_metadata(page: CatalogPage, edition_year: int, is_current: bool) -> bytes:
+    """Build the companion metadata format consumed by Bedrock Knowledge Bases."""
+    values: dict[str, str] = {
+        "source": f"{page.title} ({edition_year} Catalog)",
+        "section": page.title,
+        "doc_type": "catalog",
+        "topic": "campus policy",
+        "edition_year": str(edition_year),
+        "is_current": str(is_current).lower(),
+    }
+    payload = {
+        "metadataAttributes": {
+            key: {
+                "value": {"type": "STRING", "stringValue": value},
+                "includeForEmbedding": key in {"source", "doc_type", "topic"},
+            }
+            for key, value in values.items()
+        }
+    }
+    return (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
+
+
 def ingest_catalog(pages: list[CatalogPage], *, edition_year: int, is_current: bool) -> int:
     """Write catalog pages to the corpus or S3, index them, and register them."""
     settings = get_settings()
@@ -180,11 +203,19 @@ def ingest_catalog(pages: list[CatalogPage], *, edition_year: int, is_current: b
         if settings.corpus_aws:
             import boto3  # type: ignore[import-not-found]
 
-            boto3.client("s3", region_name=settings.aws_region).put_object(
+            client = boto3.client("s3", region_name=settings.aws_region)
+            key = f"raw/catalog/{edition_year}/{slug}.md"
+            client.put_object(
                 Bucket=settings.corpus_bucket,
-                Key=f"raw/catalog/{edition_year}/{slug}.md",
+                Key=key,
                 Body=body.encode("utf-8"),
                 ContentType="text/markdown",
+            )
+            client.put_object(
+                Bucket=settings.corpus_bucket,
+                Key=f"{key}.metadata.json",
+                Body=_bedrock_metadata(page, edition_year, is_current),
+                ContentType="application/json",
             )
             chunks = 1
         else:
@@ -214,11 +245,13 @@ def _register_remote(slug: str, page: CatalogPage, edition_year: int, is_current
     from .models import SourceUpsert
     from .registry import registry_store
 
-    registry_store().upsert(SourceUpsert(
+    store = registry_store()
+    existing = store.get(slug)
+    store.upsert(SourceUpsert(
         id=slug,
         title=f"{page.title} ({edition_year} Catalog)",
         source_type="catalog",
-        status="active",
+        status=existing.status if existing is not None else "active",
         canonical_url=page.url,
         edition_year=edition_year,
         is_current=is_current,

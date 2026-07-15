@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -116,16 +118,69 @@ def upload_corpus(bucket: str, source_root: Path) -> None:
         )
 
 
+def _registry_item(source: CorpusSource) -> dict[str, dict[str, str]]:
+    filename = Path(source.relative_path).name
+    source_type = {
+        "handbook": "handbook",
+        "cba": "cba",
+        "resolutions": "policystat",
+        "synthetic": "policystat",
+    }[source.prefix]
+    return {
+        "id": {"S": Path(filename).stem.lower()},
+        "title": {"S": Path(filename).stem},
+        "source_type": {"S": source_type},
+        "status": {"S": "active"},
+        "canonical_url": {"S": ""},
+        "edition_year": {"S": ""},
+        "is_current": {"N": "1"},
+        "s3_key": {"S": f"{source.prefix}/{filename}"},
+        "passages": {"N": "0"},
+        "updated_at": {"S": datetime.now(timezone.utc).isoformat()},
+    }
+
+
+def seed_registry(table: str) -> None:
+    """Register missing AWS corpus rows without reactivating archived sources."""
+    for source in CORPUS_SOURCES:
+        result = subprocess.run(
+            [
+                "aws",
+                "dynamodb",
+                "put-item",
+                "--table-name",
+                table,
+                "--item",
+                json.dumps(_registry_item(source), separators=(",", ":")),
+                "--condition-expression",
+                "attribute_not_exists(id)",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 and "ConditionalCheckFailedException" not in result.stderr:
+            result.check_returncode()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bucket", help="CorpusBucketName stack output; omit to validate and preview only.")
+    parser.add_argument(
+        "--registry-table",
+        default=os.getenv("DDB_REGISTRY_TABLE"),
+        help="DdbRegistryTable stack output; seeds active source rows after upload.",
+    )
     parser.add_argument("--source-root", type=Path, default=DEFAULT_SOURCE_ROOT)
     args = parser.parse_args()
     source_root = args.source_root.resolve()
     validate_manifest(source_root)
     if args.bucket:
         upload_corpus(args.bucket, source_root)
+        if args.registry_table:
+            seed_registry(args.registry_table)
         print(f"Uploaded {len(CORPUS_SOURCES)} sources plus metadata sidecars to {args.bucket}.")
+        if args.registry_table:
+            print(f"Seeded {len(CORPUS_SOURCES)} active source rows in {args.registry_table}.")
         return
     for source in CORPUS_SOURCES:
         print(f"{source.relative_path} -> {source.prefix}/{Path(source.relative_path).name}")

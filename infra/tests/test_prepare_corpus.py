@@ -11,6 +11,7 @@ from infra.scripts.prepare_corpus import (
     DEFAULT_SOURCE_ROOT,
     MANAGED_CORPUS_PREFIXES,
     REPO_ROOT,
+    _registry_item,
     build_staging_tree,
 )
 
@@ -27,7 +28,7 @@ class PrepareCorpusTests(unittest.TestCase):
         )
         cdk_prefixes = {prefix.rstrip("/") for prefix in ast.literal_eval(value)}
 
-        self.assertEqual(cdk_prefixes, MANAGED_CORPUS_PREFIXES | {"uploads"})
+        self.assertEqual(cdk_prefixes, MANAGED_CORPUS_PREFIXES | {"uploads", "raw"})
         self.assertEqual({source.prefix for source in CORPUS_SOURCES}, MANAGED_CORPUS_PREFIXES)
 
     def test_every_source_is_staged_under_a_kb_prefix_with_metadata(self) -> None:
@@ -54,6 +55,15 @@ class PrepareCorpusTests(unittest.TestCase):
                 if path.is_file() and not path.name.endswith(".metadata.json")
             ]
             self.assertEqual(len(staged_sources), len(CORPUS_SOURCES))
+
+    def test_registry_seed_items_match_bedrock_source_names(self) -> None:
+        for source in CORPUS_SOURCES:
+            item = _registry_item(source)
+            filename = Path(source.relative_path).name
+            self.assertEqual(item["id"]["S"], Path(filename).stem.lower())
+            self.assertEqual(item["title"]["S"], Path(filename).stem)
+            self.assertEqual(item["status"]["S"], "active")
+            self.assertEqual(item["s3_key"]["S"], f"{source.prefix}/{filename}")
 
 
 if __name__ == "__main__":

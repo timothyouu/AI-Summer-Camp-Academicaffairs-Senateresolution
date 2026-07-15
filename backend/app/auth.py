@@ -79,10 +79,27 @@ def verify_request_authorization(authorization: str | None, settings: Settings) 
     _verified_claims_from_authorization(authorization, settings)
 
 
-def require_reviewer(authorization: str | None = Header(default=None)) -> None:
-    """Require a verified Cognito maker for protected mutations in AWS mode."""
+def require_reviewer(
+    authorization: str | None = Header(default=None),
+    x_role: str | None = Header(default=None),
+    x_user_email: str | None = Header(default=None),
+) -> None:
+    """Require a reviewer when the request carries a Cognito or demo identity.
+
+    Header-less local requests remain allowed for backwards compatibility with
+    the frozen API tests and existing command-line workflows.
+    """
     settings = get_settings()
-    if settings.cognito_aws and role_from_claims(_verified_claims_from_authorization(authorization, settings)) != "reviewer":
+    if settings.cognito_aws:
+        role = role_from_claims(_verified_claims_from_authorization(authorization, settings))
+    elif x_user_email is not None:
+        account = DEMO_ACCOUNTS.get(x_user_email.lower().strip())
+        role = account[1] if account is not None else "employee"
+    elif x_role is not None:
+        role = "reviewer" if x_role == "reviewer" else "employee"
+    else:
+        return
+    if role != "reviewer":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Reviewer role required")
 
 

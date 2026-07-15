@@ -76,7 +76,7 @@ CHUNK_OVERLAP_PERCENTAGE = 20
 # the data source's inclusion_prefixes or the live-ingestion demo step
 # (implementation2.md §1 step 9) will upload successfully but never get
 # synced into the Knowledge Base.
-CORPUS_PREFIXES = ["handbook/", "cba/", "resolutions/", "synthetic/", "uploads/"]
+CORPUS_PREFIXES = ["handbook/", "cba/", "resolutions/", "synthetic/", "uploads/", "raw/"]
 VECTOR_INDEX_NAME = "policy-intelligence-index"
 VECTOR_FIELD_NAME = "bedrock-knowledge-base-default-vector"
 TEXT_FIELD_NAME = "AMAZON_BEDROCK_TEXT_CHUNK"
@@ -671,29 +671,28 @@ class PolicyIntelligenceStack(Stack):
         corpus_bucket: s3.Bucket,
         registry_table: dynamodb.Table,
     ) -> _lambda.Function:
-        # Same bundling pattern as IngestionFn: backend/lambda_handlers/
-        # catalog_scraper.py (owned by a different task, may not exist yet
-        # in this worktree) is expected to do an absolute
-        # `from backend.app... import` and needs `backend` importable as a
-        # top-level package, so the asset root is the repo root, not
-        # backend/lambda_handlers/. Per implementation3.md Task 6, the
-        # scraper is stdlib-only (urllib/html.parser), so no extra pip
-        # install is needed beyond pydantic (same as ingestion, for the
-        # shared config/stores/models import chain).
+        # catalog_scraper.py imports `app.catalog`, so package backend/ as the
+        # asset root just like ApiFn. The scraper itself uses only the stdlib,
+        # but its shared catalog/registry import chain reaches FastAPI, NumPy,
+        # and pypdf; bundle those existing backend runtime dependencies so the
+        # Lambda can import its handler before it enters the AWS-only branch.
+        scraper_asset_path = REPO_ROOT / "backend"
         fn = _lambda.Function(
             self,
             "CatalogScraperFn",
             runtime=_lambda.Runtime.PYTHON_3_12,
-            handler="backend.lambda_handlers.catalog_scraper.handler",
+            handler="lambda_handlers.catalog_scraper.handler",
             code=_lambda.Code.from_asset(
-                str(REPO_ROOT),
-                exclude=_REPO_ROOT_ASSET_EXCLUDES,
+                str(scraper_asset_path),
+                exclude=[".venv", "tests", "**/__pycache__", ".pytest_cache"],
                 bundling=BundlingOptions(
                     image=_lambda.Runtime.PYTHON_3_12.bundling_image,
                     command=[
                         "bash",
                         "-c",
-                        "pip install 'pydantic>=2.8,<3' -t /asset-output"
+                        "sed '/^pytest/d;/^uvicorn/d;/^httpx/d;/^strands-agents/d;/^mangum/d' requirements.txt"
+                        " > /tmp/requirements-scraper.txt"
+                        " && pip install -r /tmp/requirements-scraper.txt -t /asset-output"
                         " && cp -au . /asset-output",
                     ],
                 ),

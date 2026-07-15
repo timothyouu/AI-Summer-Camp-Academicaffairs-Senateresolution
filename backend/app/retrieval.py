@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
+from pathlib import PurePosixPath
 
 import numpy as np
 
 from .config import INDEX_DIR, get_settings
 from .llm import EMBEDDING_DIMENSION, embed_texts
+from .models import SourceRecord
 
 
 @dataclass(frozen=True)
@@ -88,12 +90,27 @@ def apply_registry_policy(results: list[SearchResult], k: int) -> list[SearchRes
     from .registry import registry_store
 
     try:
-        records = {record.title: record for record in registry_store().list()}
+        records: dict[str, SourceRecord] = {}
+        for record in registry_store().list():
+            keys = {record.id.casefold(), record.title.casefold()}
+            if record.s3_key:
+                path = PurePosixPath(record.s3_key)
+                keys.update({path.name.casefold(), path.stem.casefold()})
+            for key in keys:
+                records[key] = record
     except Exception:
         return results[:k]
     kept: list[SearchResult] = []
     for item in results:
-        record = records.get(item.source)
+        source_path = PurePosixPath(item.source)
+        record = next(
+            (
+                records[key]
+                for key in (item.source.casefold(), source_path.name.casefold(), source_path.stem.casefold())
+                if key in records
+            ),
+            None,
+        )
         if record is not None and record.status == "archived":
             continue
         if record is not None and not record.is_current:

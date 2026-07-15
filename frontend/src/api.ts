@@ -253,9 +253,11 @@ const writeConflictState = (state: PersistedConflictMap): void => {
 export async function askQuestion(text: string, role: Role = "reviewer"): Promise<Answer> {
   const question = text.trim();
   if (!question) throw new Error("Enter a policy question.");
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (import.meta.env.VITE_USE_COGNITO !== "true") headers["X-Role"] = role;
   const backend = await backendRequest<BackendChatResponse>("/api/chat", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Role": role },
+    headers,
     body: JSON.stringify({ question }),
   }, AGENT_REQUEST_TIMEOUT_MS, agentBaseUrl);
   if (backend !== null) {

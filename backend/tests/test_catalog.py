@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from backend.app.catalog import CatalogPage, discover_policy_links, html_to_markdown, ingest_catalog, scrape_edition
+import json
+
+from backend.app.catalog import (
+    CatalogPage,
+    _bedrock_metadata,
+    _register_remote,
+    discover_policy_links,
+    html_to_markdown,
+    ingest_catalog,
+    scrape_edition,
+)
 from backend.app.registry import registry_store
 
 HTML = """
@@ -46,6 +56,35 @@ def test_scrape_edition_crawls_with_fake_fetcher_and_respects_cap() -> None:
         max_pages=2,
     )
     assert len(pages) == 2 and len(set(calls)) == 2
+
+
+def test_bedrock_metadata_identifies_catalog_source_and_edition() -> None:
+    page = CatalogPage(
+        url="https://catalog.csub.edu/policy",
+        title="Grade Appeal Policy",
+        markdown="# Grade Appeal",
+    )
+    payload = json.loads(_bedrock_metadata(page, edition_year=2024, is_current=False))
+    attributes = payload["metadataAttributes"]
+    assert attributes["source"]["value"]["stringValue"] == "Grade Appeal Policy (2024 Catalog)"
+    assert attributes["edition_year"]["value"]["stringValue"] == "2024"
+    assert attributes["is_current"]["value"]["stringValue"] == "false"
+
+
+def test_remote_catalog_reregistration_preserves_archived_status() -> None:
+    page = CatalogPage(
+        url="https://catalog.csub.edu/policy",
+        title="Remote Policy",
+        markdown="# Remote Policy",
+    )
+    _register_remote("catalog-2024-remote-policy", page, 2024, False)
+    store = registry_store()
+    store.set_status("catalog-2024-remote-policy", "archived")
+
+    _register_remote("catalog-2024-remote-policy", page, 2024, False)
+
+    record = store.get("catalog-2024-remote-policy")
+    assert record is not None and record.status == "archived"
 
 
 def test_ingest_catalog_registers_active_edition_tagged_sources() -> None:

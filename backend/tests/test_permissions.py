@@ -33,6 +33,24 @@ def test_permissions_endpoints() -> None:
         assert listed.status_code == 200 and isinstance(listed.json(), list)
 
 
+def test_employee_identity_cannot_manage_permissions() -> None:
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/permissions",
+            headers={"X-User-Email": "employee@campus.edu"},
+        )
+        assert response.status_code == 403
+
+        spoofed = client.get(
+            "/api/permissions",
+            headers={
+                "X-User-Email": "employee@campus.edu",
+                "X-Role": "reviewer",
+            },
+        )
+        assert spoofed.status_code == 403
+
+
 def test_upload_denied_without_can_add_identity() -> None:
     with TestClient(app) as client:
         seed_default_permissions()

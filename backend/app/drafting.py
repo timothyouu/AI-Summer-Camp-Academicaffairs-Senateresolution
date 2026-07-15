@@ -12,7 +12,7 @@ from .auth import require_reviewer
 from .config import get_settings
 from .database import connection, initialize_database
 from .models import DraftReviseRequest, DraftReviseResponse, DraftVersion, ResolutionFinding
-from .stores import _ddb_decode, _ddb_encode
+from .stores import _ddb_decode, _ddb_encode, _ddb_error_code
 
 router = APIRouter(prefix="/api/draft", tags=["drafting"])
 
@@ -75,21 +75,31 @@ class DynamoDBDraftStore:
         self.table = settings.ddb_drafts_table
 
     def add_version(self, draft_id: str, text: str, suggestion: str) -> DraftVersion:
-        existing = self.list_versions(draft_id)
-        next_version = (existing[-1].version + 1) if existing else 1
-        now = datetime.now(timezone.utc).isoformat()
-        values: dict[str, object] = {
-            "draft_id": draft_id,
-            "version": next_version,
-            "text": text,
-            "suggestion": suggestion,
-            "created_at": now,
-        }
-        self.client.put_item(  # type: ignore[attr-defined]
-            TableName=self.table,
-            Item=_ddb_encode(values),
-            ConditionExpression="attribute_not_exists(draft_id) AND attribute_not_exists(version)",
-        )
+        values: dict[str, object] | None = None
+        for _attempt in range(5):
+            existing = self.list_versions(draft_id)
+            next_version = (existing[-1].version + 1) if existing else 1
+            values = {
+                "draft_id": draft_id,
+                "version": next_version,
+                "text": text,
+                "suggestion": suggestion,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            try:
+                self.client.put_item(  # type: ignore[attr-defined]
+                    TableName=self.table,
+                    Item=_ddb_encode(values),
+                    ConditionExpression="attribute_not_exists(draft_id) AND attribute_not_exists(version)",
+                )
+                break
+            except Exception as error:
+                if _ddb_error_code(error) != "ConditionalCheckFailedException":
+                    raise
+        else:
+            raise RuntimeError("Draft version allocation remained contended after 5 attempts")
+        if values is None:
+            raise RuntimeError("Draft version allocation failed")
         settings = get_settings()
         if settings.corpus_aws:
             import boto3  # type: ignore[import-not-found]
@@ -107,6 +117,7 @@ class DynamoDBDraftStore:
             TableName=self.table,
             KeyConditionExpression="draft_id = :draft",
             ExpressionAttributeValues={":draft": {"S": draft_id}},
+            ConsistentRead=True,
         )
         return sorted(
             (_version(_ddb_decode(item)) for item in response.get("Items", [])),

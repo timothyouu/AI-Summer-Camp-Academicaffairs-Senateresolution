@@ -36,6 +36,18 @@ def test_non_current_edition_is_down_ranked_not_dropped() -> None:
     assert kept[1].score == 0.4
 
 
+def test_bedrock_filename_matches_registry_s3_key() -> None:
+    registry_store().upsert(SourceUpsert(
+        id="catalog-2024-policy",
+        title="Policy (2024 Catalog)",
+        source_type="catalog",
+        status="archived",
+        s3_key="raw/catalog/2024/catalog-2024-policy.md",
+    ))
+    kept = apply_registry_policy([_result("catalog-2024-policy.md", 0.9)], k=8)
+    assert kept == []
+
+
 def test_k_is_applied_after_filtering() -> None:
     kept = apply_registry_policy([_result(f"Doc {index}", 1.0 - index / 10) for index in range(6)], k=2)
     assert len(kept) == 2
