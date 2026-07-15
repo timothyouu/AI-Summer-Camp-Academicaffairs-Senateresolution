@@ -13,7 +13,10 @@ Hackathon customer solution for a university (CSUB): a policy search assistant w
 ## Project Structure
 - `spec.md` — demo spec, scope decisions, success criteria, assumptions
 - `implementation.md` — phased plan, repo layout, verification steps
-- `backend/`, `frontend/`, `data/` — per the layout in implementation.md (not yet scaffolded)
+- `demo workflow.md` — frame-to-frame navigation map for the 12 UI frames (source of truth for routing)
+- `PROGRESS.md` — frontend build task ledger (statuses so Claude/Codex can resume cold)
+- `frontend/` — Vite + React-TS (strict) + Tailwind 3.4 SPA; hand-written scaffold (no `npm create`), `frontend/LOOP.md` holds the build-loop methodology
+- `backend/`, `data/` — per the layout in implementation.md (not yet scaffolded)
 
 ## Architecture Notes
 - Local-first demo deliberately mirroring the PRD's AWS target (FastAPI⇄API Gateway/Lambda, data/corpus⇄S3, NumPy index⇄Bedrock KB) so it ports without a rewrite.
@@ -29,5 +32,19 @@ Hackathon customer solution for a university (CSUB): a policy search assistant w
 ## Dependencies
 Planned (not yet installed — needs Tim's approval): fastapi, uvicorn, boto3, pypdf, numpy, python-multipart; Vite react-ts scaffold, tailwindcss, react-router-dom.
 
+## Frontend Decisions (2026-07-14)
+- Frontend-only for now: all content from typed mocks in `src/data/mock.ts` behind a typed `src/api.ts` facade shaped like implementation.md's endpoints (backend swap later touches one file).
+- Design source of truth: 12 frame PNGs at `/mnt/c/Users/timot/.codex/generated_images/019f62e2-8e7b-7702-852c-c8336fb4affa/`; fidelity bar is close match, not pixel-diff.
+- CSUB shield logo is a hand-built SVG approximation (`src/components/Logo.tsx`), not the official asset.
+- Build orchestrated via Codex subagents (gpt-5.6-sol for complex pages, gpt-5.6-terra for simpler ones); Claude orchestrates and verifies with Playwright.
+
+## Sidebar Unification (2026-07-14, evening)
+- Single 96px icon-rail sidebar for both roles (the old wide 256px reviewer variant is deleted). Item order: New chat, Search chats, Drafts, Reviews, Conflicts, Topics, Sources — employee role shows only New chat / Search chats / Topics; reviewer shows all seven. Decided with Tim via alignment questions; do not reintroduce per-role layouts.
+- Role now persists via RoleProvider (localStorage) instead of being forced by the route: shared routes (/chats, /chats/:id, /library, /topics, /topics/:slug) render under the current role (`SharedRoute` in App.tsx); maker-only routes still force reviewer (`WorkspaceRoute`).
+- /library page is now "Search chats" (chats-only searchable history; Saved policies tab removed). The route and file name Library.tsx are unchanged.
+- Note: `demo workflow.md`'s frame map predates this unification; the sidebar behavior above supersedes it where they conflict.
+
 ## Last Updated
-2026-07-14 — Project created: spec.md, implementation.md, CLAUDE.md written from the Notion PRD and two challenge overview files. No code yet.
+2026-07-14 (evening) — Sidebar unified to one icon rail with persisted role + Library→Search chats (see Sidebar Unification section); verified via tsc, vite build, and Playwright click-through of both roles.
+
+Previous: 2026-07-14 (later) — Frontend COMPLETE and verified: 12 pages (`frontend/src/pages/`), shared layout/sidebar/role-switcher components, typed mocks (`src/data/mock.ts`) behind `src/api.ts`. Verified via tsc --strict, vite build, and a Playwright click-through of all 6 demo paths plus frame-by-frame screenshot judgment (see PROGRESS.md, incl. WSL screenshot workaround). Run with `cd frontend && npm run dev`. Backend still not built.
