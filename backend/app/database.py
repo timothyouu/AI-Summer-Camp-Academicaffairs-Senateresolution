@@ -27,6 +27,33 @@ CREATE TABLE IF NOT EXISTS uploads (
     chunks_added INTEGER NOT NULL,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS feedback (
+    feedback_id TEXT PRIMARY KEY,
+    answer_id TEXT NOT NULL,
+    question TEXT NOT NULL,
+    rating TEXT NOT NULL,
+    comment TEXT NOT NULL DEFAULT '',
+    issue_type TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT '',
+    citations_used TEXT NOT NULL DEFAULT '[]',
+    provider TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS recurring_questions (
+    question_id TEXT PRIMARY KEY,
+    question_text TEXT NOT NULL,
+    normalized_text TEXT NOT NULL,
+    topic TEXT NOT NULL DEFAULT 'general',
+    ask_count INTEGER NOT NULL DEFAULT 1,
+    first_asked_at TEXT NOT NULL,
+    last_asked_at TEXT NOT NULL,
+    sample_answer_id TEXT NOT NULL DEFAULT '',
+    sample_citations TEXT NOT NULL DEFAULT '[]',
+    scope TEXT NOT NULL DEFAULT 'global',
+    visibility TEXT NOT NULL DEFAULT 'published',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 

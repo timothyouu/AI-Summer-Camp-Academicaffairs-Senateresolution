@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from .conflicts import create_or_get_conflict
 from .models import ChatRequest, ChatResponse, Citation, ConflictCreate, ConflictSignal
 from .retrieval import SearchResult, search
+from .stores import get_recurring_question_store
 
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -107,19 +108,43 @@ def _local_index_answer(results: list[SearchResult]) -> ChatResponse:
     )
 
 
+def _record_recurring_question(question: str, response: ChatResponse) -> None:
+    """Persist question frequency without allowing storage failures to affect chat."""
+    try:
+        get_recurring_question_store().record_question(
+            question_text=question,
+            answer_id=response.answer_id,
+            citations=[f"{citation.source} — {citation.section}" for citation in response.citations],
+        )
+    except Exception:
+        # Chat answers remain available when optional application-memory storage is offline.
+        return
+
+
 @router.post("/chat", response_model=ChatResponse)
 def chat(payload: ChatRequest) -> ChatResponse:
     fixture = _calibrated(payload.question)
     if fixture is None:
-        return _local_index_answer(search(payload.question, k=6))
-    signal: ConflictSignal | None = None
-    if fixture.conflict is not None:
-        source_a, source_b, topic, description = fixture.conflict
-        record = create_or_get_conflict(ConflictCreate(source_a=source_a, source_b=source_b, topic=topic, description=description))
-        signal = ConflictSignal(
-            detected=True,
-            sources=[source_a, source_b],
-            guidance="Review the later source's adoption/effective status and consult Faculty Affairs before relying on superseded wording.",
-            conflict_id=record.id,
+        response = _local_index_answer(search(payload.question, k=6))
+    else:
+        signal: ConflictSignal | None = None
+        if fixture.conflict is not None:
+            source_a, source_b, topic, description = fixture.conflict
+            record = create_or_get_conflict(
+                ConflictCreate(source_a=source_a, source_b=source_b, topic=topic, description=description),
+                origin="chat",
+            )
+            signal = ConflictSignal(
+                detected=True,
+                sources=[source_a, source_b],
+                guidance="Review the later source's adoption/effective status and consult Faculty Affairs before relying on superseded wording.",
+                conflict_id=record.id,
+            )
+        response = ChatResponse(
+            answer=fixture.answer,
+            citations=_citations(fixture.citations),
+            conflict=signal,
+            mode="calibrated-static",
         )
-    return ChatResponse(answer=fixture.answer, citations=_citations(fixture.citations), conflict=signal, mode="calibrated-static")
+    _record_recurring_question(payload.question, response)
+    return response

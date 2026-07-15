@@ -2,6 +2,13 @@
 frontend/node_modules/
 frontend/dist/
 
+# Local environment files (never commit credentials or deployment settings)
+.env
+.env.local
+backend/.env
+frontend/.env
+frontend/.env.local
+
 # Python virtual environments and runtime artifacts
 backend/.venv/
 __pycache__/

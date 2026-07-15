@@ -12,6 +12,8 @@ export interface Answer {
   paragraphs: string[];
   conflictBanner?: string;
   citations: Citation[];
+  answerId?: string;
+  mode?: "local-index" | "calibrated-static";
 }
 
 export interface ReviewSubmission {

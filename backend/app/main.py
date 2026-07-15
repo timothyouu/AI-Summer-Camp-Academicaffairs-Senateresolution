@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import auth, chat, conflicts, resolution, topics, uploads
+from . import auth, chat, conflicts, feedback, recurring_questions, resolution, topics, uploads
 from .config import CORPUS_DIR, ensure_data_directories
 from .conflicts import seed_demo_conflicts
 from .database import initialize_database
@@ -39,7 +39,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for api_router in (auth.router, chat.router, resolution.router, topics.router, conflicts.router, uploads.router):
+for api_router in (auth.router, chat.router, resolution.router, topics.router, conflicts.router, feedback.router, recurring_questions.router, uploads.router):
     app.include_router(api_router)
 
 
