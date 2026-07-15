@@ -22,9 +22,9 @@ def handler(event: dict[str, Any], context: object) -> dict[str, int]:
         try:
             response = bedrock.start_ingestion_job(knowledgeBaseId=settings.bedrock_kb_id, dataSourceId=_data_source_id(settings.bedrock_kb_id, settings.aws_region))
             job_id = str(response.get("ingestionJob", {}).get("ingestionJobId", ""))
-            store.register(filename, "Ingesting", upload_id=job_id or None)
+            store.register(filename, "ingesting", upload_id=filename)
         except Exception:
-            store.register(filename, "Failed")
+            store.register(filename, "failed", upload_id=filename)
             raise
         processed += 1
     return {"processed": processed}

@@ -122,6 +122,27 @@ class UploadResponse(BaseModel):
     upload_url: str | None = None
 
 
+IngestionStatus = Literal["pending", "ingesting", "ready", "failed"]
+
+
+class PresignedUploadRequest(BaseModel):
+    filename: str
+    content_type: str
+
+
+class PresignedUploadResponse(BaseModel):
+    upload_id: str
+    upload_url: str
+    headers: dict[str, str] | None = None
+
+
+class IngestionResponse(BaseModel):
+    upload_id: str
+    status: IngestionStatus
+    chunks_added: int | None = None
+    error: str | None = None
+
+
 class HealthResponse(BaseModel):
     status: str
     index_chunks: int

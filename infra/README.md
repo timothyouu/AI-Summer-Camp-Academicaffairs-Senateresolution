@@ -44,32 +44,57 @@ looks the data source id up at runtime via `list_data_sources()` — so that
 value is only exposed as a stack output (`BedrockDataSourceId`), for the
 manual `start-ingestion-job` CLI command in "Post-deploy steps" below.
 
-## Packaging note (dependency bundling)
+## Packaging note (dependency bundling — wired into the stack, Docker required)
 
-Both `Code.from_asset(...)` calls currently package **source directories
-as-is** — no `pip install -r requirements.txt -t .` bundling step is wired
-up, because that requires either Docker (`BundlingOptions` with a build
-image) or a local `--platform manylinux2014_x86_64` pip install, both of
-which are out of scope for a dry-run-only pass (this pass could not run
-`cdk synth` at all — see the top of this file). Before a real deploy,
-either:
+Both `Code.from_asset(...)` calls now use `BundlingOptions` with the
+runtime's official build image (`Runtime.PYTHON_3_12.bundling_image`), so
+**`cdk synth`/`cdk deploy` require a running Docker daemon** — CDK spins up
+the build container, pip-installs into `/asset-output`, copies the source
+on top, and zips the result. No manual bundling step remains:
 
-- Wrap the asset in `lambda.Code.from_asset(path, bundling=cdk.BundlingOptions(...))`
-  using the `public.ecr.aws/sam/build-python3.12` image to `pip install
-  backend/requirements.txt` into `/asset-output`, or
-- Pre-build a dependency layer (`fastapi`, `mangum`, `pypdf`, `numpy`,
-  `strands-agents`; `boto3` is already in the runtime so it doesn't need
-  bundling) and attach it via `layers=[...]` on both `ApiFn` and
-  `IngestionFn`.
+- **`ApiFn`** installs `backend/requirements.txt` with dev/server-only
+  lines stripped (`pytest`, `uvicorn`, `httpx` — not needed inside Lambda,
+  and `strands-agents`+`numpy` already push the zip toward the 250 MB
+  unzipped limit; if a deploy ever hits that limit, move deps to a layer
+  or switch to a container-image Lambda).
+- **`IngestionFn`** installs only `pydantic>=2.8,<3` (its import chain —
+  config → stores → models — reaches nothing else beyond the stdlib;
+  `boto3` is imported lazily and ships in the Lambda runtime).
+
+On WSL2, make sure Docker Desktop (or a native dockerd) is running before
+`cdk synth`. The first synth is slow (image pull + pip install); later
+synths hit the CDK asset cache unless backend source or requirements
+change.
+
+## CORS: pass the frontend origin at deploy time
+
+API Gateway HTTP APIs treat every CORS `allow_origins` entry as a
+**literal string** — a wildcard like `https://*.amplifyapp.com` never
+matches anything, so it is not used here. The stack always allows the two
+localhost dev origins (`http://localhost:5173`, `:5174`) and adds one
+deployed-frontend origin from CDK context. Once the Amplify (or other
+hosting) URL exists, deploy with:
+
+```bash
+cdk deploy -c frontendOrigin=https://main.dXXXXXXXXXXXX.amplifyapp.com
+```
+
+Pass the exact scheme+host (no trailing slash, no path). Every later
+`cdk deploy` must repeat the `-c frontendOrigin=...` flag, or the origin
+drops back out of the CORS allowlist — to make it sticky, add
+`"frontendOrigin": "https://..."` to the `context` block of
+`infra/cdk.json` instead.
 
 ## Deploy — exact ordered commands
 
 Run from `infra/` unless noted. Assumes Tim has already run `aws configure`
 (or `aws sso login`) with an account that has Bedrock model access and
-OpenSearch Serverless enabled in the target region.
+OpenSearch Serverless enabled in the target region, and that **Docker is
+running** (required for Lambda dependency bundling — see the packaging
+note above).
 
 ```bash
-# 1. Python deps for CDK itself (not the Lambda code — see packaging note above)
+# 1. Python deps for CDK itself (Lambda deps are bundled automatically at synth)
 pip install -r infra/requirements.txt
 
 # 2. Node CDK CLI, if not already installed globally
@@ -81,10 +106,15 @@ export AWS_REGION=us-west-2   # or wherever Bedrock + OpenSearch Serverless are 
 cdk bootstrap aws://ACCOUNT_ID/us-west-2
 
 # 4. Sanity-check the synthesized template before deploying
+#    (needs Docker up — this step pip-installs the Lambda deps in a container)
 cdk synth
 
-# 5. Deploy
+# 5. Deploy. Add -c frontendOrigin=... once the hosted frontend URL exists
+#    (see "CORS: pass the frontend origin" above); without it only the
+#    localhost dev origins are CORS-allowed.
 cdk deploy
+# later, with the real frontend URL:
+# cdk deploy -c frontendOrigin=https://main.dXXXXXXXXXXXX.amplifyapp.com
 ```
 
 `cdk deploy` will prompt to approve IAM policy changes (the KB service role,
@@ -177,9 +207,10 @@ aws cloudformation describe-stacks --stack-name PolicyIntelligenceStack \
   Documented as a post-deploy CLI step above instead of a second custom
   resource, to keep the stack's blast radius (and Tim's review surface)
   smaller — this is a two-command follow-up, not worth another Lambda.
-- **Dependency-bundled Lambda code.** See "Packaging note" above — asset
-  bundling with Docker wasn't attempted since Docker-based `cdk synth` can't
-  be verified in this environment either.
+- **The deployed frontend's CORS origin.** HTTP API CORS origins are
+  literal strings, and the Amplify URL doesn't exist until the frontend is
+  hosted — so it can't be hardcoded in the stack. Supplied at deploy time
+  via `-c frontendOrigin=...` (see "CORS: pass the frontend origin" above).
 
 ## Teardown
 
@@ -229,6 +260,12 @@ cdk destroy
 - `aws-cdk-lib.aws_apigatewayv2_authorizers` docs / bobbyhadz walkthrough —
   confirmed `HttpUserPoolAuthorizer` + `HttpLambdaIntegration` are in the
   stable (non-alpha) `aws-cdk-lib` package as of the pinned version range.
+- CDK asset-bundling docs + community examples — confirmed the
+  `Code.from_asset(path, bundling=BundlingOptions(image=Runtime.PYTHON_3_12
+  .bundling_image, command=["bash","-c","pip install -r requirements.txt
+  -t /asset-output && cp -au . /asset-output"]))` pattern (core
+  `aws_cdk.BundlingOptions`, container reads `/asset-input` cwd, writes
+  `/asset-output`).
 
 None of this was confirmed by an actual `cdk synth` — see the top of this
 file. Run `cdk synth` yourself as the first real check once dependencies are

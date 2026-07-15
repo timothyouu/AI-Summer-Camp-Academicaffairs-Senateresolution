@@ -33,6 +33,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aws_cdk import (
+    BundlingOptions,
     CfnOutput,
     Duration,
     RemovalPolicy,
@@ -516,8 +517,14 @@ class PolicyIntelligenceStack(Stack):
         # (`from backend.app.config import get_settings`), which means
         # "backend" must be a top-level importable package inside the
         # deployment zip — so the asset root is the repo root, not
-        # backend/lambda_handlers/. See README "Packaging note" for the
-        # exclude list keeping this from bundling frontend/node_modules etc.
+        # backend/lambda_handlers/ (excludes keep frontend/, .git, and local
+        # demo data out of the container input).
+        #
+        # Bundling: ingestion.py's import chain (config -> stores -> models)
+        # only reaches pydantic beyond the stdlib; boto3 is imported lazily
+        # and ships in the Lambda runtime. Installing just pydantic (with the
+        # same version pin as backend/requirements.txt) keeps this zip tiny
+        # instead of dragging in fastapi/numpy/strands.
         fn = _lambda.Function(
             self,
             "IngestionFn",
@@ -526,6 +533,15 @@ class PolicyIntelligenceStack(Stack):
             code=_lambda.Code.from_asset(
                 str(REPO_ROOT),
                 exclude=_REPO_ROOT_ASSET_EXCLUDES,
+                bundling=BundlingOptions(
+                    image=_lambda.Runtime.PYTHON_3_12.bundling_image,
+                    command=[
+                        "bash",
+                        "-c",
+                        "pip install 'pydantic>=2.8,<3' -t /asset-output"
+                        " && cp -au . /asset-output",
+                    ],
+                ),
             ),
             timeout=Duration.minutes(5),
             memory_size=256,
@@ -572,9 +588,14 @@ class PolicyIntelligenceStack(Stack):
         # import app`), unlike ingestion.py — so its asset root is
         # backend/ itself (making "app" the top-level package in the zip),
         # and the handler string is "app.lambda_entry.handler", not
-        # "backend.app.lambda_entry.handler". A real deploy still needs a
-        # dependency-bundled asset (see README "Packaging note") since this
-        # packages source only, not fastapi/mangum/boto3 etc.
+        # "backend.app.lambda_entry.handler".
+        #
+        # Bundling: pip-installs backend/requirements.txt into the asset
+        # inside the runtime's build container (Docker required at synth
+        # time). Dev/server-only deps (pytest, uvicorn, httpx) are stripped
+        # first — they're not needed in Lambda and just bloat the zip toward
+        # the 250 MB unzipped limit. boto3 ships in the runtime and is left
+        # in requirements harmlessly (pip just installs its pinned copy).
         api_asset_path = REPO_ROOT / "backend"
 
         fn = _lambda.Function(
@@ -585,6 +606,16 @@ class PolicyIntelligenceStack(Stack):
             code=_lambda.Code.from_asset(
                 str(api_asset_path),
                 exclude=[".venv", "tests", "**/__pycache__", ".pytest_cache", "lambda_handlers"],
+                bundling=BundlingOptions(
+                    image=_lambda.Runtime.PYTHON_3_12.bundling_image,
+                    command=[
+                        "bash",
+                        "-c",
+                        "sed '/^pytest/d;/^uvicorn/d;/^httpx/d' requirements.txt > /tmp/requirements-lambda.txt"
+                        " && pip install -r /tmp/requirements-lambda.txt -t /asset-output"
+                        " && cp -au . /asset-output",
+                    ],
+                ),
             ),
             timeout=Duration.seconds(29),  # API Gateway HTTP API hard limit is 30s
             memory_size=512,
@@ -635,8 +666,13 @@ class PolicyIntelligenceStack(Stack):
             self,
             "HttpApi",
             api_name="policy-intelligence-api",
+            # API Gateway HTTP API treats each allowed origin as a LITERAL
+            # string — "https://*.amplifyapp.com" would never match, so the
+            # deployed frontend's exact origin must be passed at deploy time
+            # via CDK context: `cdk deploy -c frontendOrigin=https://...`.
+            # Localhost dev origins are always included as the default.
             cors_preflight=apigwv2.CorsPreflightOptions(
-                allow_origins=["http://localhost:5173", "http://localhost:5174", "https://*.amplifyapp.com"],
+                allow_origins=self._allowed_origins(),
                 allow_methods=[apigwv2.CorsHttpMethod.ANY],
                 allow_headers=["Authorization", "Content-Type"],
                 allow_credentials=True,
@@ -701,6 +737,20 @@ class PolicyIntelligenceStack(Stack):
         CfnOutput(self, "ApiUrl", value=http_api.api_endpoint)
 
     # ------------------------------------------------------------------
+    def _allowed_origins(self) -> list[str]:
+        """CORS origins: localhost dev servers plus an optional deployed
+        frontend origin from CDK context (`-c frontendOrigin=https://...`).
+
+        HTTP API CORS origins are literal strings (no wildcards below the
+        scheme), so the real Amplify/hosting URL has to be supplied once it
+        is known — see infra/README.md "CORS: pass the frontend origin".
+        """
+        origins = ["http://localhost:5173", "http://localhost:5174"]
+        frontend_origin = self.node.try_get_context("frontendOrigin")
+        if isinstance(frontend_origin, str) and frontend_origin:
+            origins.append(frontend_origin.rstrip("/"))
+        return origins
+
     @staticmethod
     def _to_json(value: object) -> str:
         import json

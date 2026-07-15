@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from typing import Protocol
 from uuid import uuid4
 
@@ -94,8 +95,17 @@ class DynamoDBConflictStore:
         return _conflict(_ddb_decode(item)) if item else None
 
 
+@dataclass(frozen=True)
+class UploadRecord:
+    upload_id: str
+    filename: str
+    status: str
+    chunks_added: int
+
+
 class UploadStore(Protocol):
     def register(self, filename: str, status: str, chunks_added: int = 0, upload_id: str | None = None) -> str: ...
+    def get(self, upload_id: str) -> UploadRecord | None: ...
 
 
 class SQLiteUploadStore:
@@ -104,6 +114,13 @@ class SQLiteUploadStore:
             database.execute("INSERT INTO uploads(filename,status,chunks_added) VALUES (?,?,?) ON CONFLICT(filename) DO UPDATE SET status=excluded.status,chunks_added=excluded.chunks_added",
                              (filename, status, chunks_added))
         return upload_id or filename
+
+    def get(self, upload_id: str) -> UploadRecord | None:
+        with connection() as database:
+            row = database.execute("SELECT filename, status, chunks_added FROM uploads WHERE filename=?", (upload_id,)).fetchone()
+        if row is None:
+            return None
+        return UploadRecord(upload_id=upload_id, filename=str(row["filename"]), status=str(row["status"]), chunks_added=int(row["chunks_added"]))
 
 
 class DynamoDBUploadStore:
@@ -124,6 +141,17 @@ class DynamoDBUploadStore:
             "created_at": _now().isoformat(), "updated_at": _now().isoformat(),
         }))
         return identifier
+
+    def get(self, upload_id: str) -> UploadRecord | None:
+        response = self.client.get_item(TableName=self.table, Key={"id": {"S": upload_id}})  # type: ignore[attr-defined]
+        item = response.get("Item")
+        if not item:
+            return None
+        values = _ddb_decode(item)
+        return UploadRecord(
+            upload_id=str(values["id"]), filename=str(values["filename"]), status=str(values["status"]),
+            chunks_added=int(values.get("chunks_added", 0)),
+        )
 
 
 def conflict_store() -> ConflictStore:
