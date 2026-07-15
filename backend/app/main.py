@@ -3,8 +3,10 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import RequestResponseEndpoint
 
 from . import auth, chat, conflicts, resolution, topics, uploads
 from .config import CORPUS_DIR, ensure_data_directories, get_settings
@@ -33,6 +35,31 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Policy Intelligence API", version="1.0.0", lifespan=lifespan)
+
+
+# The agent Lambda Function URL (auth_type=NONE) exposes every route, not just
+# the two it exists for, so authentication cannot rely on the API Gateway
+# authorizer alone. In Cognito mode every /api route except health and login
+# requires a verified JWT in-app; locally this is a no-op.
+_AUTH_EXEMPT_PATHS = {"/api/health", "/api/login"}
+
+
+@app.middleware("http")
+async def _cognito_auth_middleware(request: Request, call_next: RequestResponseEndpoint) -> Response:
+    settings = get_settings()
+    if (
+        settings.cognito_aws
+        and request.url.path.startswith("/api")
+        and request.url.path not in _AUTH_EXEMPT_PATHS
+        and request.method != "OPTIONS"
+    ):
+        try:
+            auth.verify_request_authorization(request.headers.get("authorization"), settings)
+        except HTTPException as error:
+            return JSONResponse(status_code=error.status_code, content={"detail": error.detail})
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"],

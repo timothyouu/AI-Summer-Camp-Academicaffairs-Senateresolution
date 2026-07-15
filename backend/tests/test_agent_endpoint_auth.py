@@ -68,3 +68,13 @@ def test_require_authenticated_is_a_noop_locally(monkeypatch: Any) -> None:
     for name in ("COGNITO_USER_POOL_ID", "COGNITO_CLIENT_ID"):
         monkeypatch.delenv(name, raising=False)
     assert auth.require_authenticated(authorization=None) is None
+
+
+def test_cognito_middleware_guards_all_api_routes(client: TestClient, monkeypatch: Any) -> None:
+    monkeypatch.setenv("COGNITO_USER_POOL_ID", "us-west-2_pool")
+    monkeypatch.setenv("COGNITO_CLIENT_ID", "client")
+
+    assert client.get("/api/conflicts").status_code == 401
+    assert client.get("/api/topics").status_code == 401
+    assert client.get("/api/uploads/some-id").status_code == 401
+    assert client.get("/api/health").status_code == 200

@@ -11,3 +11,4 @@
 2026-07-15T06:52:42-07:00 review round-7 fixes hit — unique upload ids + pending/retry lifecycle (sol), Function URL for agent endpoints (opus); 39 pytest, tsc/build, py_compile
 2026-07-15T06:54:58-07:00 review round-8 fixes hit (inline) — Strands message text extraction, uploads/ S3 notification filter (40 pytest)
 2026-07-15T06:58:04-07:00 review round-9 fixes hit (inline) — corpus bucket CORS for browser PUT, idempotent conflict create race (41 pytest)
+2026-07-15T07:06:48-07:00 review round-10 fixes hit — app-wide Cognito auth middleware (inline), KB-backed topics (sol); 46 pytest

@@ -74,6 +74,11 @@ def _verified_claims_from_authorization(authorization: str | None, settings: Set
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Cognito token") from error
 
 
+def verify_request_authorization(authorization: str | None, settings: Settings) -> None:
+    """App-wide JWT check used by the auth middleware in Cognito mode."""
+    _verified_claims_from_authorization(authorization, settings)
+
+
 def require_reviewer(authorization: str | None = Header(default=None)) -> None:
     """Require a verified Cognito maker for protected mutations in AWS mode."""
     settings = get_settings()
