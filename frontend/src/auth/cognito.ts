@@ -84,6 +84,20 @@ const clearStoredSession = (): void => {
   window.dispatchEvent(new Event(cognitoSessionExpiredEvent));
 };
 
+/** Clears the local tokens and ends the Cognito Hosted UI session. */
+export function signOutCognito(): void {
+  window.localStorage.removeItem(tokensKey);
+  window.sessionStorage.removeItem(verifierKey);
+  window.sessionStorage.removeItem(stateKey);
+  if (!cognitoEnabled) {
+    window.location.assign("/login");
+    return;
+  }
+  const logoutUri = `${new URL(redirectUri).origin}/`;
+  const query = new URLSearchParams({ client_id: clientId, logout_uri: logoutUri });
+  window.location.assign(`${domain}/logout?${query.toString()}`);
+}
+
 const refreshCognitoSession = async (tokens: CognitoTokens): Promise<CognitoTokens | null> => {
   if (!tokens.refresh_token) return null;
   const body = new URLSearchParams({ grant_type: "refresh_token", client_id: clientId, refresh_token: tokens.refresh_token });

@@ -54,7 +54,7 @@ interface BackendResolutionResponse {
   duplicates: BackendResolutionFinding[];
   conflicts: BackendResolutionFinding[];
   recommendation: string;
-  mode: "local-index" | "calibrated-static";
+  mode: "local-index" | "calibrated-static" | "agent-grounded";
   agent_trace: BackendAgentTrace[];
 }
 interface BackendAgentTrace {
@@ -560,7 +560,7 @@ export async function checkResolution(text: string): Promise<ReviewAnalysis> {
       ...backend.conflicts.map((finding) => ({ type: "Conflict" as const, source: `${finding.source} • ${finding.section}` })),
     ];
     return {
-      demoLabel: backend.mode === "calibrated-static" ? "Calibrated local demo analysis" : "Local source-index analysis",
+      demoLabel: backend.mode === "agent-grounded" ? "Grounded Strands agent analysis" : backend.mode === "calibrated-static" ? "Calibrated local demo analysis" : "Local source-index analysis",
       steps: [{ label: "Retrieved passages", complete: true }, { label: "Compared sources", complete: true }, { label: "Classified findings", complete: true }, { label: "Prepared recommendation", complete: true }],
       coverageLabel: findings.length > 0 ? "Coverage found in supplied sources" : "No material overlap found",
       confidence: findings.length > 0 ? 94 : 70,
