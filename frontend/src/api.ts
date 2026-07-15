@@ -62,7 +62,7 @@ interface BackendAgentTrace {
   label: string;
   status: AgentTraceStatus;
   detail?: string;
-  citations?: BackendCitation[];
+  citations?: BackendCitation[] | null;
 }
 interface BackendConflict {
   id: number;
@@ -678,7 +678,7 @@ export async function checkResolution(text: string): Promise<ReviewAnalysis> {
       recommendation: backend.recommendation,
       agentTrace: (Array.isArray(backend.agent_trace) ? backend.agent_trace : reviewAnalysis.agentTrace).map(({ citations, ...step }) => ({
         ...step,
-        ...(citations === undefined ? {} : { citations: citations.map((citation) => "source" in citation ? { id: citation.id, title: citation.source, section: citation.section } : { ...citation }) }),
+        ...(citations == null ? {} : { citations: citations.map((citation) => "source" in citation ? { id: citation.id, title: citation.source, section: citation.section } : { ...citation }) }),
       })),
     };
   }
@@ -756,7 +756,7 @@ export async function reviseDraft(text: string, draftId?: string): Promise<Draft
     ],
     agentTrace: backend.agent_trace.map(({ citations, ...step }) => ({
       ...step,
-      ...(citations === undefined ? {} : { citations: citations.map((citation) => ({ id: citation.id, title: citation.source, section: citation.section })) }),
+      ...(citations == null ? {} : { citations: citations.map((citation) => ({ id: citation.id, title: citation.source, section: citation.section })) }),
     })),
   };
 }
