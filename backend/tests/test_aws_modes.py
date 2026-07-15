@@ -114,3 +114,34 @@ def test_dynamodb_conflict_list_paginates_scans(monkeypatch: Any) -> None:
 def test_cognito_group_role_mapping() -> None:
     assert role_from_claims({"cognito:groups": ["makers"]}) == "reviewer"
     assert role_from_claims({"cognito:groups": ["employees"]}) == "employee"
+
+
+def test_dynamodb_conflict_create_race_returns_existing_record(monkeypatch: Any) -> None:
+    class ConditionalCheckFailed(Exception):
+        response = {"Error": {"Code": "ConditionalCheckFailedException", "Message": "conditional failed"}}
+
+    class Client:
+        def __init__(self) -> None:
+            self.gets = 0
+            self.stored: dict[str, object] | None = None
+
+        def get_item(self, **kwargs: object) -> dict[str, object]:
+            self.gets += 1
+            if self.gets == 1:
+                return {}
+            assert self.stored is not None
+            return {"Item": self.stored}
+
+        def put_item(self, **kwargs: object) -> dict[str, object]:
+            from backend.app.stores import _ddb_encode, _now
+            self.stored = _ddb_encode({
+                "id": "123", "source_a": "A", "source_b": "B", "topic": "T", "description": "D",
+                "status": "Open", "resolution_note": "", "created_at": _now().isoformat(), "updated_at": _now().isoformat(),
+            })
+            raise ConditionalCheckFailed()
+
+    monkeypatch.setenv("DDB_CONFLICTS_TABLE", "ConflictLog")
+    store = DynamoDBConflictStore(Client())
+    record = store.create_or_get(ConflictCreate(source_a="A", source_b="B", topic="T", description="D"))
+    assert record.id == 123
+    assert store.client.gets == 2  # type: ignore[attr-defined]

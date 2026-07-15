@@ -166,6 +166,16 @@ class PolicyIntelligenceStack(Stack):
             # Prefixes handbook/, cba/, resolutions/, synthetic/ are a naming
             # convention enforced by the upload path (backend/app/uploads.py
             # AWS-mode branch), not separate S3 resources. See README.
+            # The frontend PUTs presigned uploads straight from the browser,
+            # so the bucket itself must answer the CORS preflight.
+            cors=[
+                s3.CorsRule(
+                    allowed_methods=[s3.HttpMethods.PUT],
+                    allowed_origins=self._allowed_origins(),
+                    allowed_headers=["Content-Type"],
+                    max_age=3600,
+                )
+            ],
         )
         return bucket
 

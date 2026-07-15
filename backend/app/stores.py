@@ -89,11 +89,21 @@ class DynamoDBConflictStore:
             return _conflict(_ddb_decode(existing))
         now = _now().isoformat()
         values: dict[str, object] = {"id": conflict_id, **payload.model_dump(), "resolution_note": "", "created_at": now, "updated_at": now}
-        self.client.put_item(  # type: ignore[attr-defined]
-            TableName=self.table,
-            Item=_ddb_encode({**values, "id": str(conflict_id)}),
-            ConditionExpression="attribute_not_exists(id)",
-        )
+        try:
+            self.client.put_item(  # type: ignore[attr-defined]
+                TableName=self.table,
+                Item=_ddb_encode({**values, "id": str(conflict_id)}),
+                ConditionExpression="attribute_not_exists(id)",
+            )
+        except Exception as error:
+            # A concurrent request won the conditional put; return its record
+            # to keep create_or_get idempotent.
+            if _ddb_error_code(error) != "ConditionalCheckFailedException":
+                raise
+            existing = self.client.get_item(TableName=self.table, Key=_ddb_conflict_key(conflict_id)).get("Item")  # type: ignore[attr-defined]
+            if not existing:
+                raise
+            return _conflict(_ddb_decode(existing))
         return _conflict(values)
 
     def update(self, conflict_id: int, payload: ConflictUpdate) -> ConflictRecord | None:
