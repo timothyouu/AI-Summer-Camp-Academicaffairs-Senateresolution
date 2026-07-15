@@ -13,36 +13,50 @@ and property names were cross-checked against AWS's CDK v2 Python API docs
 and reference implementations (links below); treat the first real `cdk
 synth` as the actual verification step.
 
-## Lambda packaging — two different asset roots, on purpose
+## Lambda packaging — different asset roots, on purpose
 
-`infra/` only owns `infra/`; the two Lambda handlers it packages
-(`backend/app/lambda_entry.py`, `backend/lambda_handlers/ingestion.py`) are
-Phase B backend code owned elsewhere in this worktree. Both already exist
-as of this stack's last edit. They use different import styles, so the
-stack gives them different `Code.from_asset` roots — get this wrong and
-`cdk deploy` will succeed but the Lambda will 500 on cold start with an
-`ImportError`:
+`infra/` only owns `infra/`; the Lambda handlers it packages
+(`backend/app/lambda_entry.py`, `backend/lambda_handlers/ingestion.py`,
+`backend/lambda_handlers/catalog_scraper.py`) are backend code owned
+elsewhere in this worktree — `catalog_scraper.py` in particular is Task 6's
+handler and may not exist yet in a given checkout (`CatalogScraperFn`'s
+asset will fail to bundle until it does; that is expected, not a bug in
+this stack). They use different import styles, so the stack gives them
+different `Code.from_asset` roots — get this wrong and `cdk deploy` will
+succeed but the Lambda will 500 on cold start with an `ImportError`:
 
 - **API Lambda** (`ApiFn`) — `lambda_entry.py` does a *relative* import
   (`from .main import app`), so the asset root is `backend/` itself
   (`app` ends up top-level in the zip) and the handler string is
-  `app.lambda_entry.handler`.
+  `app.lambda_entry.handler`. This is the **only** Lambda that serves API
+  Gateway routes — it also serves the two long-running agent endpoints via
+  a Function URL (see "Agent endpoints and the 29s cap" below), so there is
+  no separate "agent Lambda" in this stack; PRD Round-2 env vars/grants are
+  wired onto this one function.
 - **Ingestion Lambda** (`IngestionFn`) — `ingestion.py` does an *absolute*
   import (`from backend.app.config import get_settings`), so the asset root
   is the **repo root** (with an exclude list keeping frontend/node_modules,
   `.git`, and local demo data out of the zip) and the handler string is
   `backend.lambda_handlers.ingestion.handler`.
+- **Catalog scraper Lambda** (`CatalogScraperFn`) — same repo-root asset
+  root and import style as `IngestionFn` (`backend.lambda_handlers
+  .catalog_scraper.handler`). No S3/EventBridge trigger — invoked manually
+  per catalog edition (see "Catalog scraper — manual invoke payloads"
+  below).
 
-Env var names on both are pinned to exactly what `backend/app/config.py`'s
-`get_settings()` reads: `BEDROCK_KB_ID`, `DDB_CONFLICTS_TABLE`,
-`DDB_UPLOADS_TABLE`, `CORPUS_BUCKET`, `COGNITO_USER_POOL_ID`,
-`COGNITO_CLIENT_ID`. `AWS_REGION` is deliberately **not** set — it's a
-reserved Lambda runtime env var and CloudFormation rejects stacks that try
-to set it explicitly; `boto3` picks it up automatically from the runtime.
-`ingestion.py` also doesn't read a `BEDROCK_DATA_SOURCE_ID` env var — it
-looks the data source id up at runtime via `list_data_sources()` — so that
-value is only exposed as a stack output (`BedrockDataSourceId`), for the
-manual `start-ingestion-job` CLI command in "Post-deploy steps" below.
+Env var names on the API and ingestion Lambdas are pinned to exactly what
+`backend/app/config.py`'s `get_settings()` reads: `BEDROCK_KB_ID`,
+`DDB_CONFLICTS_TABLE`, `DDB_UPLOADS_TABLE`, `DDB_REGISTRY_TABLE`,
+`DDB_PERMISSIONS_TABLE`, `DDB_DRAFTS_TABLE`, `CORPUS_BUCKET`,
+`COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID` (the ingestion and catalog
+scraper Lambdas only set the subset they actually use). `AWS_REGION` is
+deliberately **not** set — it's a reserved Lambda runtime env var and
+CloudFormation rejects stacks that try to set it explicitly; `boto3` picks
+it up automatically from the runtime. `ingestion.py` also doesn't read a
+`BEDROCK_DATA_SOURCE_ID` env var — it looks the data source id up at
+runtime via `list_data_sources()` — so that value is only exposed as a
+stack output (`BedrockDataSourceId`), for the manual `start-ingestion-job`
+CLI command in "Post-deploy steps" below.
 
 ## Packaging note (dependency bundling — wired into the stack, Docker required)
 
@@ -60,6 +74,10 @@ on top, and zips the result. No manual bundling step remains:
 - **`IngestionFn`** installs only `pydantic>=2.8,<3` (its import chain —
   config → stores → models — reaches nothing else beyond the stdlib;
   `boto3` is imported lazily and ships in the Lambda runtime).
+- **`CatalogScraperFn`** installs only `pydantic>=2.8,<3`, same reasoning as
+  `IngestionFn`. Per implementation3.md Task 6, the scraper itself is
+  stdlib-only (`urllib`/`html.parser`, no `requests`/`beautifulsoup4`), so
+  nothing scraper-specific needs bundling.
 
 On WSL2, make sure Docker Desktop (or a native dockerd) is running before
 `cdk synth`. The first synth is slow (image pull + pip install); later
@@ -229,6 +247,9 @@ Lambda roles, etc.) — approve them.
 | `BedrockDataSourceId` | *(not read by backend)* | not a backend env var — ingestion.py resolves it at runtime via `list_data_sources()`; use this output only for the manual `start-ingestion-job` CLI call in step 2 above |
 | `DdbConflictsTable` | `DDB_CONFLICTS_TABLE` | table name is literally `ConflictLog` |
 | `DdbUploadsTable` | `DDB_UPLOADS_TABLE` | table name is literally `Uploads` |
+| `DdbRegistryTable` | `DDB_REGISTRY_TABLE` | `SourceRegistry` — source catalog (seeds + uploads + scraped entries) |
+| `DdbPermissionsTable` | `DDB_PERMISSIONS_TABLE` | `SourcePermissions` — per-user, per-source-type access |
+| `DdbDraftsTable` | `DDB_DRAFTS_TABLE` | `DraftVersions` — AI-drafting version history |
 | `CognitoUserPoolId` | `COGNITO_USER_POOL_ID` | |
 | `CognitoClientId` | `COGNITO_CLIENT_ID` | SPA app client, no secret |
 | `CognitoHostedUiUrl` | `VITE_COGNITO_DOMAIN` (frontend) | hosted UI domain for the `VITE_USE_COGNITO` flow (LOOP.md decision 5) |
@@ -249,6 +270,38 @@ still flows through the HTTP API and its Cognito JWT authorizer. Because the
 Function URL bypasses that authorizer, the two endpoints validate the Cognito
 token in-app (`backend/app/auth.py` `require_authenticated` / `require_reviewer`),
 so they stay authenticated in AWS mode.
+
+### Catalog scraper — manual invoke payloads
+
+`CatalogScraperFn` has no S3 or EventBridge trigger — invoke it manually
+per catalog edition with the AWS CLI (or the console "Test" tab). It writes
+scraped pages into `CorpusBucketName` and upserts rows into
+`DdbRegistryTable`; per implementation3.md Task 2, archived editions are
+down-ranked (`ARCHIVED_EDITION_WEIGHT = 0.5`) relative to the current one.
+
+Current 2026 catalog (`is_current: true`):
+
+```bash
+aws lambda invoke --function-name <CatalogScraperFn-name> \
+  --payload '{"url": "https://catalog.csub.edu/", "year": 2026, "is_current": true}' \
+  --cli-binary-format raw-in-base64-out response.json
+```
+
+One archived edition (`is_current: false` — substitute the actual archived
+edition root URL, e.g. an older `catalog.csub.edu` snapshot):
+
+```bash
+aws lambda invoke --function-name <CatalogScraperFn-name> \
+  --payload '{"url": "<archived edition root>", "year": 2024, "is_current": false}' \
+  --cli-binary-format raw-in-base64-out response.json
+```
+
+The Function name is not currently a stack output (only `CatalogScraperFn`'s
+logical id is fixed); find the physical name with:
+
+```bash
+aws lambda list-functions --query "Functions[?starts_with(FunctionName, 'PolicyIntelligenceStack-CatalogScraperFn')].FunctionName" --output text
+```
 
 Get all outputs after deploy with:
 
@@ -304,7 +357,12 @@ cdk destroy
   if wanted.
 - Everything else (Lambdas, API Gateway, IAM roles, the vector index custom
   resource, log groups minus their 1-week retention tail) is deleted by
-  `cdk destroy` normally.
+  `cdk destroy` normally. This includes the PRD Round-2 tables
+  `SourceRegistry`, `SourcePermissions`, and `DraftVersions` — unlike
+  `ConflictLog`/`Uploads` above, those three are `RemovalPolicy.DESTROY`
+  (net-new demo tables, no production data to protect) and are wiped along
+  with the rest of the stack; re-run the catalog scraper post-redeploy if
+  the registry needs reseeding.
 
 ## Verification sources consulted (Bedrock KB + OpenSearch Serverless CDK patterns)
 

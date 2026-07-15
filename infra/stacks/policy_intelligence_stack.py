@@ -8,7 +8,9 @@ Resource map (see infra/README.md for the full deploy story):
     policies + a custom-resource-created vector index) backing a Bedrock
     Knowledge Base (Titan Text Embeddings V2) with an S3 data source
     (~500 token / 20% overlap fixed-size chunking).
-  - DynamoDB tables ConflictLog and Uploads.
+  - DynamoDB tables ConflictLog and Uploads, plus PRD Round-2 tables
+    SourceRegistry, SourcePermissions, and DraftVersions (implementation3.md
+    Task 11).
   - Cognito User Pool (+ hosted UI domain, app client, `makers`/`employees`
     groups).
   - API Lambda (FastAPI app, handler app.lambda_entry.handler, asset root
@@ -20,11 +22,16 @@ Resource map (see infra/README.md for the full deploy story):
 
 Env var names on both Lambdas are pinned to exactly what
 backend/app/config.py's get_settings() reads (BEDROCK_KB_ID,
-DDB_CONFLICTS_TABLE, DDB_UPLOADS_TABLE, CORPUS_BUCKET,
+DDB_CONFLICTS_TABLE, DDB_UPLOADS_TABLE, DDB_REGISTRY_TABLE,
+DDB_PERMISSIONS_TABLE, DDB_DRAFTS_TABLE, CORPUS_BUCKET,
 COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID) — AWS_REGION is deliberately not
 set since it's a reserved Lambda runtime env var. This worktree owns
-`infra/` only; backend/app/lambda_entry.py and
-backend/lambda_handlers/ingestion.py are Phase B code owned elsewhere.
+`infra/` only; backend/app/lambda_entry.py,
+backend/lambda_handlers/ingestion.py, and
+backend/lambda_handlers/catalog_scraper.py are Phase B code owned
+elsewhere (the scraper handler in particular may not exist yet in a given
+checkout — see Task 11's CatalogScraperFn, invoked manually per catalog
+edition, no EventBridge schedule).
 Dependencies are pip-bundled into each asset via BundlingOptions (Docker
 required at synth time) — see infra/README.md "Packaging note".
 """
@@ -102,7 +109,9 @@ class PolicyIntelligenceStack(Stack):
         region = self.region
 
         corpus_bucket = self._build_corpus_bucket()
-        conflicts_table, uploads_table = self._build_dynamodb_tables()
+        conflicts_table, uploads_table, registry_table, permissions_table, drafts_table = (
+            self._build_dynamodb_tables()
+        )
         user_pool, user_pool_client, user_pool_domain = self._build_cognito()
         collection, kb_role = self._build_opensearch_and_kb_role(corpus_bucket)
         vector_index_resource = self._build_vector_index_custom_resource(collection, region)
@@ -126,10 +135,18 @@ class PolicyIntelligenceStack(Stack):
             s3.NotificationKeyFilter(prefix="uploads/"),
         )
 
+        self._build_catalog_scraper_lambda(
+            corpus_bucket=corpus_bucket,
+            registry_table=registry_table,
+        )
+
         api_lambda = self._build_api_lambda(
             corpus_bucket=corpus_bucket,
             conflicts_table=conflicts_table,
             uploads_table=uploads_table,
+            registry_table=registry_table,
+            permissions_table=permissions_table,
+            drafts_table=drafts_table,
             knowledge_base=knowledge_base,
             data_source=data_source,
             user_pool=user_pool,
@@ -143,6 +160,9 @@ class PolicyIntelligenceStack(Stack):
             corpus_bucket=corpus_bucket,
             conflicts_table=conflicts_table,
             uploads_table=uploads_table,
+            registry_table=registry_table,
+            permissions_table=permissions_table,
+            drafts_table=drafts_table,
             knowledge_base=knowledge_base,
             data_source=data_source,
             user_pool=user_pool,
@@ -183,7 +203,9 @@ class PolicyIntelligenceStack(Stack):
     # ------------------------------------------------------------------
     # DynamoDB
     # ------------------------------------------------------------------
-    def _build_dynamodb_tables(self) -> tuple[dynamodb.Table, dynamodb.Table]:
+    def _build_dynamodb_tables(
+        self,
+    ) -> tuple[dynamodb.Table, dynamodb.Table, dynamodb.Table, dynamodb.Table, dynamodb.Table]:
         conflicts_table = dynamodb.Table(
             self,
             "ConflictLogTable",
@@ -219,7 +241,37 @@ class PolicyIntelligenceStack(Stack):
             sort_key=dynamodb.Attribute(name="filename", type=dynamodb.AttributeType.STRING),
         )
 
-        return conflicts_table, uploads_table
+        # PRD Round-2 tables (implementation3.md Task 11): source catalog
+        # registry/permissions and the AI-drafting version history. Unlike
+        # ConflictLog/Uploads above, these are net-new demo tables with no
+        # existing production data to protect, so RemovalPolicy.DESTROY (not
+        # RETAIN) is used per implementation3.md's exact spec — `cdk destroy`
+        # cleans them up along with everything else.
+        registry_table = dynamodb.Table(
+            self,
+            "SourceRegistry",
+            partition_key=dynamodb.Attribute(name="id", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        permissions_table = dynamodb.Table(
+            self,
+            "SourcePermissions",
+            partition_key=dynamodb.Attribute(name="user_email", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="source_type", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        drafts_table = dynamodb.Table(
+            self,
+            "DraftVersions",
+            partition_key=dynamodb.Attribute(name="draft_id", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="version", type=dynamodb.AttributeType.NUMBER),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        return conflicts_table, uploads_table, registry_table, permissions_table, drafts_table
 
     # ------------------------------------------------------------------
     # Cognito
@@ -608,6 +660,58 @@ class PolicyIntelligenceStack(Stack):
         return fn
 
     # ------------------------------------------------------------------
+    # Catalog scraper Lambda (implementation3.md Task 11 / Task 6) — manual
+    # invoke only, no EventBridge schedule for the demo. See infra/README.md
+    # for the two invoke payloads (current 2026 catalog + one archived
+    # edition).
+    # ------------------------------------------------------------------
+    def _build_catalog_scraper_lambda(
+        self,
+        *,
+        corpus_bucket: s3.Bucket,
+        registry_table: dynamodb.Table,
+    ) -> _lambda.Function:
+        # Same bundling pattern as IngestionFn: backend/lambda_handlers/
+        # catalog_scraper.py (owned by a different task, may not exist yet
+        # in this worktree) is expected to do an absolute
+        # `from backend.app... import` and needs `backend` importable as a
+        # top-level package, so the asset root is the repo root, not
+        # backend/lambda_handlers/. Per implementation3.md Task 6, the
+        # scraper is stdlib-only (urllib/html.parser), so no extra pip
+        # install is needed beyond pydantic (same as ingestion, for the
+        # shared config/stores/models import chain).
+        fn = _lambda.Function(
+            self,
+            "CatalogScraperFn",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="backend.lambda_handlers.catalog_scraper.handler",
+            code=_lambda.Code.from_asset(
+                str(REPO_ROOT),
+                exclude=_REPO_ROOT_ASSET_EXCLUDES,
+                bundling=BundlingOptions(
+                    image=_lambda.Runtime.PYTHON_3_12.bundling_image,
+                    command=[
+                        "bash",
+                        "-c",
+                        "pip install 'pydantic>=2.8,<3' -t /asset-output"
+                        " && cp -au . /asset-output",
+                    ],
+                ),
+            ),
+            timeout=Duration.minutes(10),
+            memory_size=512,
+            log_retention=logs.RetentionDays.ONE_WEEK,
+            environment={
+                "CORPUS_BUCKET": corpus_bucket.bucket_name,
+                "DDB_REGISTRY_TABLE": registry_table.table_name,
+                # AWS_REGION is a reserved Lambda env var — not set explicitly.
+            },
+        )
+        corpus_bucket.grant_put(fn)
+        registry_table.grant_read_write_data(fn)
+        return fn
+
+    # ------------------------------------------------------------------
     # API Lambda (FastAPI via Mangum) + HTTP API
     # ------------------------------------------------------------------
     def _build_api_lambda(
@@ -616,6 +720,9 @@ class PolicyIntelligenceStack(Stack):
         corpus_bucket: s3.Bucket,
         conflicts_table: dynamodb.Table,
         uploads_table: dynamodb.Table,
+        registry_table: dynamodb.Table,
+        permissions_table: dynamodb.Table,
+        drafts_table: dynamodb.Table,
         knowledge_base: bedrock.CfnKnowledgeBase,
         data_source: bedrock.CfnDataSource,
         user_pool: cognito.UserPool,
@@ -670,6 +777,14 @@ class PolicyIntelligenceStack(Stack):
                 "BEDROCK_KB_ID": knowledge_base.attr_knowledge_base_id,
                 "DDB_CONFLICTS_TABLE": conflicts_table.table_name,
                 "DDB_UPLOADS_TABLE": uploads_table.table_name,
+                # PRD Round-2 (implementation3.md Task 11): source catalog
+                # registry/permissions + AI-drafting version history. This
+                # same ApiFn also serves the two long-running agent endpoints
+                # via the Function URL below, so there is no separate "agent
+                # Lambda" in this stack to wire these onto.
+                "DDB_REGISTRY_TABLE": registry_table.table_name,
+                "DDB_PERMISSIONS_TABLE": permissions_table.table_name,
+                "DDB_DRAFTS_TABLE": drafts_table.table_name,
                 "CORPUS_BUCKET": corpus_bucket.bucket_name,
                 "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
                 "COGNITO_CLIENT_ID": user_pool_client.user_pool_client_id,
@@ -677,7 +792,17 @@ class PolicyIntelligenceStack(Stack):
         )
         conflicts_table.grant_read_write_data(fn)
         uploads_table.grant_read_write_data(fn)
+        registry_table.grant_read_write_data(fn)
+        permissions_table.grant_read_write_data(fn)
+        drafts_table.grant_read_write_data(fn)
         corpus_bucket.grant_read_write(fn)
+        # AI-drafting version history copies drafts into S3 under drafts/*
+        # (implementation3.md Task 9) — grant_read_write above already covers
+        # this bucket-wide, but the explicit prefix grant documents the
+        # requirement from implementation3.md Task 11 Step 2 and keeps this
+        # Lambda's put access to drafts/* correct if the blanket grant above
+        # is ever narrowed later.
+        corpus_bucket.grant_put(fn, "drafts/*")
         fn.add_to_role_policy(
             iam.PolicyStatement(
                 sid="BedrockRuntimeAccess",
@@ -802,6 +927,9 @@ class PolicyIntelligenceStack(Stack):
         corpus_bucket: s3.Bucket,
         conflicts_table: dynamodb.Table,
         uploads_table: dynamodb.Table,
+        registry_table: dynamodb.Table,
+        permissions_table: dynamodb.Table,
+        drafts_table: dynamodb.Table,
         knowledge_base: bedrock.CfnKnowledgeBase,
         data_source: bedrock.CfnDataSource,
         user_pool: cognito.UserPool,
@@ -819,6 +947,9 @@ class PolicyIntelligenceStack(Stack):
         CfnOutput(self, "BedrockDataSourceId", value=data_source.attr_data_source_id)
         CfnOutput(self, "DdbConflictsTable", value=conflicts_table.table_name)
         CfnOutput(self, "DdbUploadsTable", value=uploads_table.table_name)
+        CfnOutput(self, "DdbRegistryTable", value=registry_table.table_name)
+        CfnOutput(self, "DdbPermissionsTable", value=permissions_table.table_name)
+        CfnOutput(self, "DdbDraftsTable", value=drafts_table.table_name)
         CfnOutput(self, "CognitoUserPoolId", value=user_pool.user_pool_id)
         CfnOutput(self, "CognitoClientId", value=user_pool_client.user_pool_client_id)
         CfnOutput(self, "CognitoHostedUiUrl", value=hosted_ui_url)
