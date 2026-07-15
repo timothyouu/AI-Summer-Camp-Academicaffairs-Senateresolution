@@ -65,16 +65,27 @@ def decode_and_verify_token(token: str, settings: Settings | None = None) -> dic
     return claims
 
 
+def _verified_claims_from_authorization(authorization: str | None, settings: Settings) -> dict[str, Any]:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer token required")
+    try:
+        return decode_and_verify_token(authorization.removeprefix("Bearer ").strip(), settings)
+    except (ValueError, URLError, KeyError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Cognito token") from error
+
+
+def require_reviewer(authorization: str | None = Header(default=None)) -> None:
+    """Require a verified Cognito maker for protected mutations in AWS mode."""
+    settings = get_settings()
+    if settings.cognito_aws and role_from_claims(_verified_claims_from_authorization(authorization, settings)) != "reviewer":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Reviewer role required")
+
+
 @router.post("/login", response_model=LoginResponse)
 def login(payload: LoginRequest, authorization: str | None = Header(default=None)) -> LoginResponse:
     settings = get_settings()
     if settings.cognito_aws:
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer token required")
-        try:
-            claims = decode_and_verify_token(authorization.removeprefix("Bearer ").strip(), settings)
-        except (ValueError, URLError, KeyError, json.JSONDecodeError) as error:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Cognito token") from error
+        claims = _verified_claims_from_authorization(authorization, settings)
         name = str(claims.get("name") or claims.get("email") or claims.get("username") or "Campus user")
         return LoginResponse(role=role_from_claims(claims), name=name)
     account = DEMO_ACCOUNTS.get(payload.email.lower().strip())

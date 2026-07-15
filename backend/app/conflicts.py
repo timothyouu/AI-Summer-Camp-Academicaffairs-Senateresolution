@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from .auth import require_reviewer
 from .models import ConflictCreate, ConflictRecord, ConflictUpdate
 from .stores import conflict_store
 
@@ -33,12 +34,12 @@ def get_conflicts() -> list[ConflictRecord]:
 
 
 @router.post("", response_model=ConflictRecord, status_code=status.HTTP_201_CREATED)
-def create_conflict(payload: ConflictCreate) -> ConflictRecord:
+def create_conflict(payload: ConflictCreate, _: None = Depends(require_reviewer)) -> ConflictRecord:
     return create_or_get_conflict(payload)
 
 
 @router.patch("/{conflict_id}", response_model=ConflictRecord)
-def update_conflict(conflict_id: int, payload: ConflictUpdate) -> ConflictRecord:
+def update_conflict(conflict_id: int, payload: ConflictUpdate, _: None = Depends(require_reviewer)) -> ConflictRecord:
     record = conflict_store().update(conflict_id, payload)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conflict not found")

@@ -88,13 +88,19 @@ class DynamoDBConflictStore:
         return _conflict(values)
 
     def update(self, conflict_id: int, payload: ConflictUpdate) -> ConflictRecord | None:
-        response = self.client.update_item(  # type: ignore[attr-defined]
-            TableName=self.table, Key=_ddb_conflict_key(conflict_id),
-            UpdateExpression="SET #status=:status, resolution_note=:note, updated_at=:updated",
-            ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={":status": {"S": payload.status}, ":note": {"S": payload.resolution_note.strip()}, ":updated": {"S": _now().isoformat()}},
-            ReturnValues="ALL_NEW",
-        )
+        try:
+            response = self.client.update_item(  # type: ignore[attr-defined]
+                TableName=self.table, Key=_ddb_conflict_key(conflict_id),
+                UpdateExpression="SET #status=:status, resolution_note=:note, updated_at=:updated",
+                ConditionExpression="attribute_exists(id)",
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={":status": {"S": payload.status}, ":note": {"S": payload.resolution_note.strip()}, ":updated": {"S": _now().isoformat()}},
+                ReturnValues="ALL_NEW",
+            )
+        except Exception as error:
+            if _ddb_error_code(error) == "ConditionalCheckFailedException":
+                return None
+            raise
         item = response.get("Attributes")
         return _conflict(_ddb_decode(item)) if item else None
 
@@ -189,6 +195,14 @@ def _ddb_encode(values: dict[str, object]) -> dict[str, dict[str, str]]:
 def _ddb_conflict_key(conflict_id: int) -> dict[str, dict[str, str]]:
     """Encode the string DynamoDB partition key while preserving integer API IDs."""
     return {"id": {"S": str(conflict_id)}}
+
+
+def _ddb_error_code(error: Exception) -> str | None:
+    response = getattr(error, "response", None)
+    if not isinstance(response, dict):
+        return None
+    details = response.get("Error")
+    return str(details.get("Code")) if isinstance(details, dict) and details.get("Code") else None
 
 
 def _ddb_decode(item: dict[str, dict[str, str]]) -> dict[str, object]:
