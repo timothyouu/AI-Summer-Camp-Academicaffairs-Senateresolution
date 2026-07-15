@@ -155,6 +155,9 @@ const delay = async (milliseconds = 80): Promise<void> => {
 };
 
 export async function login(role: Role): Promise<LoginResult> {
+  if (import.meta.env.VITE_USE_COGNITO === "true") {
+    throw new Error("Demo login is unavailable while Cognito sign-in is enabled.");
+  }
   const email = role === "reviewer" ? "reviewer@campus.edu" : "employee@campus.edu";
   const result = await backendRequest<LoginResult>("/api/login", {
     method: "POST",

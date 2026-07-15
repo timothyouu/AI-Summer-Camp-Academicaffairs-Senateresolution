@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import re
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from .agents import GroundedPassage, create_pipeline
+from .auth import require_reviewer
 from .conflicts import create_or_get_conflict
 from .models import ConflictCreate, ResolutionFinding, ResolutionRequest, ResolutionResponse
 from .retrieval import search
@@ -18,7 +19,7 @@ def _finding(source: str, section: str, description: str) -> ResolutionFinding:
 
 
 @router.post("/check-resolution", response_model=ResolutionResponse)
-def check_resolution(payload: ResolutionRequest) -> ResolutionResponse:
+def check_resolution(payload: ResolutionRequest, _: None = Depends(require_reviewer)) -> ResolutionResponse:
     normalized = re.sub(r"\s+", " ", payload.text.lower())
     retrieved = search(payload.text, k=8)
     pipeline_result = create_pipeline().run(

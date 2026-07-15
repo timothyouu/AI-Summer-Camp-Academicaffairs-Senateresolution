@@ -568,8 +568,19 @@ class PolicyIntelligenceStack(Stack):
         corpus_bucket.grant_read(fn)
         fn.add_to_role_policy(
             iam.PolicyStatement(
-                sid="StartIngestionJob",
-                actions=["bedrock:StartIngestionJob", "bedrock:GetIngestionJob"],
+                sid="KbIngestion",
+                # ingestion.py calls list_data_sources on every event,
+                # start_ingestion_job, and (on the concurrent-job reuse path)
+                # list_ingestion_jobs; get_ingestion_job kept for parity with
+                # status checks. All four scope to the knowledge-base ARN per
+                # the Bedrock service authorization reference / AWS's own KB
+                # management example policy.
+                actions=[
+                    "bedrock:StartIngestionJob",
+                    "bedrock:GetIngestionJob",
+                    "bedrock:ListIngestionJobs",
+                    "bedrock:ListDataSources",
+                ],
                 resources=[knowledge_base.attr_knowledge_base_arn],
             )
         )
@@ -653,8 +664,22 @@ class PolicyIntelligenceStack(Stack):
         )
         fn.add_to_role_policy(
             iam.PolicyStatement(
+                # retrieval.py calls bedrock-agent-runtime retrieve;
+                # RetrieveAndGenerate was dropped — the backend never calls
+                # it, and per AWS docs that action only works with
+                # Resource "*" (a KB-ARN-scoped grant would be ineffective).
                 sid="BedrockKbRetrieve",
-                actions=["bedrock:Retrieve", "bedrock:RetrieveAndGenerate"],
+                actions=["bedrock:Retrieve"],
+                resources=[knowledge_base.attr_knowledge_base_arn],
+            )
+        )
+        fn.add_to_role_policy(
+            iam.PolicyStatement(
+                # uploads.py's GET /api/uploads/{id} polling calls
+                # list_data_sources + get_ingestion_job on bedrock-agent.
+                # Both scope to the knowledge-base ARN.
+                sid="BedrockKbIngestionStatus",
+                actions=["bedrock:ListDataSources", "bedrock:GetIngestionJob"],
                 resources=[knowledge_base.attr_knowledge_base_arn],
             )
         )

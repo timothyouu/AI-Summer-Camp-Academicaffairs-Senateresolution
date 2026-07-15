@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import AppLayout from "./components/AppLayout";
 import type { Role } from "./data/mock";
@@ -16,12 +16,32 @@ import Sources from "./pages/Sources";
 import TopicDetail from "./pages/TopicDetail";
 import TopicList from "./pages/TopicList";
 import { RoleProvider, useRole } from "./state/role";
-import { cognitoSessionExpiredEvent } from "./auth/cognito";
+import { cognitoSessionExpiredEvent, getCognitoAuthorizationToken } from "./auth/cognito";
+
+const cognitoModeEnabled = import.meta.env.VITE_USE_COGNITO === "true";
+
+function CognitoWorkspaceGate({ children }: { children: ReactNode }) {
+  const [hasSession, setHasSession] = useState<boolean | null>(cognitoModeEnabled ? null : true);
+
+  useEffect(() => {
+    if (!cognitoModeEnabled) return;
+    let active = true;
+    void getCognitoAuthorizationToken().then(
+      (token) => { if (active) setHasSession(token !== null); },
+      () => { if (active) setHasSession(false); },
+    );
+    return () => { active = false; };
+  }, []);
+
+  if (hasSession === null) return null;
+  if (!hasSession) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
 
 /** Renders under whatever role is currently active (does not force one). Used for routes shared by both roles. */
 function SharedRoute({ children }: { children: ReactNode }) {
   const { role } = useRole();
-  return <AppLayout role={role}>{children}</AppLayout>;
+  return <CognitoWorkspaceGate><AppLayout role={role}>{children}</AppLayout></CognitoWorkspaceGate>;
 }
 
 /** Forces the given role. Used for maker-only routes an employee has no sidebar links to. */
@@ -30,7 +50,7 @@ function WorkspaceRoute({ role, children }: { role: Role; children: ReactNode })
   useEffect(() => {
     if (currentRole !== role) setRole(role);
   }, [currentRole, role, setRole]);
-  return <AppLayout role={role}>{children}</AppLayout>;
+  return <CognitoWorkspaceGate><AppLayout role={role}>{children}</AppLayout></CognitoWorkspaceGate>;
 }
 
 function AppRoutes() {

@@ -34,6 +34,26 @@ def test_cognito_employee_cannot_mutate_conflicts(
     assert response.json() == {"detail": "Reviewer role required"}
 
 
+@pytest.mark.parametrize(
+    ("method", "url", "payload"),
+    [
+        ("post", "/api/uploads/presign", {"filename": "policy.pdf", "content_type": "application/pdf"}),
+        ("post", "/api/check-resolution", {"text": "A draft resolution about AI policy."}),
+    ],
+)
+def test_cognito_employee_cannot_use_reviewer_workflows(
+    client: TestClient, monkeypatch: Any, method: str, url: str, payload: dict[str, str],
+) -> None:
+    monkeypatch.setenv("COGNITO_USER_POOL_ID", "us-west-2_pool")
+    monkeypatch.setenv("COGNITO_CLIENT_ID", "client")
+    monkeypatch.setattr(auth, "decode_and_verify_token", lambda _token, _settings: {"cognito:groups": ["employees"]})
+
+    response = getattr(client, method)(url, json=payload, headers={"Authorization": "Bearer employee-token"})
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Reviewer role required"}
+
+
 def test_ingestion_reuses_active_job_after_concurrent_job_conflict(monkeypatch: Any) -> None:
     class ConcurrentJobError(Exception):
         response = {"Error": {"Code": "ConflictException", "Message": "A concurrent ingestion job is already running"}}

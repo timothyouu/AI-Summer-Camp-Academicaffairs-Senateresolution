@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { login } from "../api";
-import { cognitoEnabled, startCognitoLogin } from "../auth/cognito";
+import { startCognitoLogin } from "../auth/cognito";
 import Logo from "../components/Logo";
 import type { Role } from "../data/mock";
 import { useRole } from "../state/role";
+
+const cognitoModeEnabled = import.meta.env.VITE_USE_COGNITO === "true";
 
 function GraduationCapIcon() {
   return (
@@ -97,7 +99,7 @@ export default function Login() {
         <h1 className="text-center text-[48px] font-bold leading-none tracking-[-0.045em] sm:text-[68px]">How can we help?</h1>
         <p className="mt-5 text-center text-[22px] tracking-[-0.025em] sm:text-[27px]">Choose your workspace.</p>
 
-        <div className="mt-8 flex w-full flex-col rounded-[27px] border border-navy/20 bg-white/80 p-3 shadow-card sm:flex-row sm:items-center">
+        {!cognitoModeEnabled && <div className="mt-8 flex w-full flex-col rounded-[27px] border border-navy/20 bg-white/80 p-3 shadow-card sm:flex-row sm:items-center">
           <button type="button" aria-pressed={selected === "employee"} onClick={() => chooseRole("employee")} className={optionClass("employee")}>
             <GraduationCapIcon />
             <span>Employee / Faculty</span>
@@ -110,9 +112,9 @@ export default function Login() {
           <button type="button" aria-label="Continue to selected workspace" disabled={isContinuing} onClick={() => void continueToWorkspace()} className="mx-auto flex h-[67px] w-[67px] shrink-0 items-center justify-center rounded-full bg-brand-blue text-white transition-colors hover:bg-brand-bright disabled:opacity-70 sm:mx-4">
             <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="h-9 w-9"><path d="M4 16h23M19 8l8 8-8 8" /></svg>
           </button>
-        </div>
+        </div>}
 
-        {cognitoEnabled && <button type="button" onClick={() => void startCognitoLogin().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Unable to start CSUB SSO sign-in."))} className="mt-5 rounded-lg bg-navy px-6 py-3 text-sm font-semibold text-white shadow-card hover:bg-navy-deep">Sign in with CSUB SSO</button>}
+        {cognitoModeEnabled && <button type="button" onClick={() => void startCognitoLogin().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Unable to start CSUB SSO sign-in."))} className="mt-5 rounded-lg bg-navy px-6 py-3 text-sm font-semibold text-white shadow-card hover:bg-navy-deep">Sign in with CSUB SSO</button>}
 
         <p className="mt-10 text-center text-[18px] tracking-[-0.025em]">Ask questions, browse trusted policy, and verify guidance.</p>
         {error && <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-5 py-3 text-red-800">{error}</p>}
