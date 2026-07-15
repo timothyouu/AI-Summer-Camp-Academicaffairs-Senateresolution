@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import RequestResponseEndpoint
 
-from . import auth, chat, conflicts, permissions, registry, resolution, topics, uploads
+from . import auth, chat, conflicts, drafting, permissions, registry, resolution, topics, uploads
 from .config import CORPUS_DIR, ensure_data_directories, get_settings
 from .conflicts import seed_demo_conflicts
 from .database import initialize_database
@@ -72,7 +72,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for api_router in (auth.router, chat.router, resolution.router, topics.router, conflicts.router, uploads.router, registry.router, permissions.router):
+for api_router in (auth.router, chat.router, resolution.router, topics.router, conflicts.router, uploads.router, registry.router, permissions.router, drafting.router):
     app.include_router(api_router)
 
 

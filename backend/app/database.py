@@ -51,6 +51,14 @@ CREATE TABLE IF NOT EXISTS permissions (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_email, source_type)
 );
+CREATE TABLE IF NOT EXISTS drafts (
+    draft_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    suggestion TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (draft_id, version)
+);
 """
 
 

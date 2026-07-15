@@ -76,6 +76,31 @@ class ResolutionResponse(BaseModel):
     agent_trace: list[AgentTraceStep] = Field(default_factory=list)
 
 
+class DraftReviseRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=50_000)
+    draft_id: str | None = None
+
+
+class DraftVersion(BaseModel):
+    draft_id: str
+    version: int
+    text: str
+    suggestion: str = ""
+    created_at: datetime
+
+
+class DraftReviseResponse(BaseModel):
+    draft_id: str
+    version: int
+    revised_text: str
+    rationale: str
+    overlaps: list[ResolutionFinding] = Field(default_factory=list)
+    duplicates: list[ResolutionFinding] = Field(default_factory=list)
+    conflicts: list[ResolutionFinding] = Field(default_factory=list)
+    recommendation: str
+    agent_trace: list[AgentTraceStep] = Field(default_factory=list)
+
+
 class TopicSummary(BaseModel):
     name: str
     count: int
