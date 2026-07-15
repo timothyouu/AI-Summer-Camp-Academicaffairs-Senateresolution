@@ -93,3 +93,12 @@ def test_trace_matches_frontend_contract() -> None:
         payload = step.model_dump(exclude_none=True)
         assert set(payload) <= {"agent", "label", "status", "detail", "citations"}
         assert payload["status"] in allowed_statuses
+
+
+def test_strands_message_text_extraction() -> None:
+    from backend.app.agents.factory import _message_text
+
+    structured = {"role": "assistant", "content": [{"text": '{"claims": '}, {"text": "[]}"}]}
+    assert _message_text(structured) == '{"claims": []}'
+    assert _message_text('{"ok": true}') == '{"ok": true}'
+    assert _message_text({"role": "assistant", "content": []}) == str({"role": "assistant", "content": []})

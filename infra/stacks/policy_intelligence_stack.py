@@ -117,9 +117,12 @@ class PolicyIntelligenceStack(Stack):
             knowledge_base=knowledge_base,
             data_source=data_source,
         )
+        # Only presigned uploads (uploads/{upload_id}/{filename}) flow through
+        # the event-driven handler; bulk corpus prefixes are synced manually.
         corpus_bucket.add_event_notification(
             s3.EventType.OBJECT_CREATED,
             s3_notifications.LambdaDestination(ingestion_lambda),
+            s3.NotificationKeyFilter(prefix="uploads/"),
         )
 
         api_lambda = self._build_api_lambda(

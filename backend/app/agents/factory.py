@@ -23,7 +23,23 @@ class StrandsLLM:
     def generate(self, system: str, user: str, json_mode: bool = False) -> str:
         del json_mode
         result = self._agent(f"{system}\n\nINPUT:\n{user}")
-        return str(getattr(result, "message", result))
+        return _message_text(getattr(result, "message", result))
+
+
+def _message_text(message: Any) -> str:
+    """Extract assistant text from a Strands result message.
+
+    Strands returns a structured message ({"role": ..., "content": [{"text":
+    ...}, ...]}) — str() on it would yield a Python repr that never parses as
+    the JSON the pipeline asked for.
+    """
+    if isinstance(message, str):
+        return message
+    content = message.get("content", []) if isinstance(message, dict) else getattr(message, "content", [])
+    parts = [block.get("text", "") if isinstance(block, dict) else str(getattr(block, "text", ""))
+             for block in content or []]
+    text = "".join(parts).strip()
+    return text if text else str(message)
 
 
 def create_pipeline(*, llm: LLM | None = None) -> AgentPipeline:
