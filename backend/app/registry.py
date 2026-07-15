@@ -136,10 +136,26 @@ def register_document(path: Path, *, status: SourceLifecycleStatus, source_type:
     resolved_type = source_type or metadata.get("source_type", "uploads")
     if resolved_type not in {"handbook", "cba", "policystat", "catalog", "uploads"}:
         resolved_type = "uploads"
-    resolved_edition_year = edition_year if edition_year is not None else (
-        existing.edition_year if existing is not None else None
+    metadata_year = metadata.get("edition_year", "")
+    file_edition_year = int(metadata_year) if metadata_year.isdigit() else None
+    metadata_current = metadata.get("is_current", "").lower()
+    file_is_current = (
+        True if metadata_current in {"1", "true", "yes"}
+        else False if metadata_current in {"0", "false", "no"}
+        else None
     )
-    resolved_is_current = is_current if edition_year is not None or existing is None else existing.is_current
+    resolved_edition_year = (
+        edition_year if edition_year is not None
+        else file_edition_year if file_edition_year is not None
+        else existing.edition_year if existing is not None
+        else None
+    )
+    resolved_is_current = (
+        is_current if edition_year is not None
+        else file_is_current if file_is_current is not None
+        else existing.is_current if existing is not None
+        else is_current
+    )
     return store.upsert(SourceUpsert(
         id=_seed_id(path), title=metadata.get("title", path.stem),
         source_type=resolved_type,  # type: ignore[arg-type]

@@ -174,7 +174,8 @@ def ingest_catalog(pages: list[CatalogPage], *, edition_year: int, is_current: b
         slug = _slug(page.title, edition_year, index)
         body = (
             f"---\ntitle: {page.title} ({edition_year} Catalog)\nsection: {page.title}\n"
-            f"source_type: catalog\ncanonical_url: {page.url}\n---\n{page.markdown}\n"
+            f"source_type: catalog\ncanonical_url: {page.url}\nedition_year: {edition_year}\n"
+            f"is_current: {'true' if is_current else 'false'}\n---\n{page.markdown}\n"
         )
         if settings.corpus_aws:
             import boto3  # type: ignore[import-not-found]

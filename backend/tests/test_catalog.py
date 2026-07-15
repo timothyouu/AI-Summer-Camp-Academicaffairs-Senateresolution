@@ -56,6 +56,7 @@ def test_ingest_catalog_registers_active_edition_tagged_sources() -> None:
     )]
     added = ingest_catalog(pages, edition_year=2024, is_current=False)
     assert added >= 1
-    record = next(item for item in registry_store().list() if item.source_type == "catalog")
+    record = registry_store().get("catalog-2024-grade-appeal-policy")
+    assert record is not None
     assert record.status == "active" and record.edition_year == 2024 and record.is_current is False
     assert record.canonical_url == "https://catalog.csub.edu/x"
