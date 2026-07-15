@@ -47,3 +47,29 @@ def test_seed_marks_uploads_archived(tmp_path, monkeypatch) -> None:
     records = {record.id: record for record in registry_store().list()}
     assert records["synthetic-demo"].status == "active"
     assert records["late-upload"].status == "archived"
+
+
+def test_seed_preserves_existing_catalog_edition_metadata() -> None:
+    from backend.app.config import CORPUS_DIR, ensure_data_directories
+
+    ensure_data_directories()
+    catalog_path = CORPUS_DIR / "catalog-2024-policy.md"
+    catalog_path.write_text(
+        "---\ntitle: Academic Policy (2024 Catalog)\nsource_type: catalog\n---\nBody.",
+        encoding="utf-8",
+    )
+    registry_store().upsert(SourceUpsert(
+        id=catalog_path.stem,
+        title="Academic Policy (2024 Catalog)",
+        source_type="catalog",
+        status="active",
+        edition_year=2024,
+        is_current=False,
+    ))
+
+    seed_registry_from_corpus()
+
+    record = registry_store().get(catalog_path.stem)
+    assert record is not None
+    assert record.edition_year == 2024
+    assert record.is_current is False

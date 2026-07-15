@@ -128,7 +128,7 @@ def _seed_id(path: Path) -> str:
 def register_document(path: Path, *, status: SourceLifecycleStatus, source_type: str | None = None,
                       canonical_url: str = "", edition_year: int | None = None, is_current: bool = True,
                       passages: int = 0) -> SourceRecord:
-    """Create the registry entry for one corpus document, preserving an existing status."""
+    """Create a registry entry without erasing lifecycle or catalog metadata on reseed."""
     text = path.read_text(encoding="utf-8", errors="replace") if path.suffix.lower() in {".md", ".txt"} else ""
     metadata, _ = _parse_front_matter(text)
     store = registry_store()
@@ -136,12 +136,16 @@ def register_document(path: Path, *, status: SourceLifecycleStatus, source_type:
     resolved_type = source_type or metadata.get("source_type", "uploads")
     if resolved_type not in {"handbook", "cba", "policystat", "catalog", "uploads"}:
         resolved_type = "uploads"
+    resolved_edition_year = edition_year if edition_year is not None else (
+        existing.edition_year if existing is not None else None
+    )
+    resolved_is_current = is_current if edition_year is not None or existing is None else existing.is_current
     return store.upsert(SourceUpsert(
         id=_seed_id(path), title=metadata.get("title", path.stem),
         source_type=resolved_type,  # type: ignore[arg-type]
         status=existing.status if existing is not None else status,
         canonical_url=canonical_url or metadata.get("canonical_url", ""),
-        edition_year=edition_year, is_current=is_current,
+        edition_year=resolved_edition_year, is_current=resolved_is_current,
         passages=passages or (existing.passages if existing is not None else 0),
     ))
 
