@@ -10,6 +10,7 @@ const statusStyles: Record<SourceStatus, string> = {
   Failed: "border border-red-300 bg-red-50 text-red-800",
   "Processing 64%": "border border-blue-400 bg-white text-brand-blue",
   "Needs review": "border border-amber-300 bg-amberbg text-amber-700",
+  Archived: "border border-slate-300 bg-slate-50 text-slate-700",
 };
 
 function Status({ status }: { status: SourceStatus }) {

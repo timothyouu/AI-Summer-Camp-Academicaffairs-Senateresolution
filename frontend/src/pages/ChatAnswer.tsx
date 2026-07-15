@@ -3,6 +3,7 @@ import { useLocation, useParams } from "react-router-dom";
 import { askQuestion, getConversation } from "../api";
 import BackButton from "../components/BackButton";
 import { type Answer, type Citation } from "../data/mock";
+import { useRole } from "../state/role";
 
 type Tab = "Answer" | "Sources" | "Related";
 
@@ -87,6 +88,7 @@ function AnswerBody({ answer, showQuestion = false }: { answer: Answer; showQues
 export default function ChatAnswer() {
   const location = useLocation();
   const { conversationId } = useParams<{ conversationId: string }>();
+  const { role } = useRole();
   const submittedQuestion = typeof location.state === "object" && location.state !== null && "question" in location.state && typeof location.state.question === "string" ? location.state.question : null;
   const [activeTab, setActiveTab] = useState<Tab>("Answer");
   const [followUp, setFollowUp] = useState("");
@@ -101,7 +103,7 @@ export default function ChatAnswer() {
     setAnswers([]);
     setLoadError("");
     const answerRequest = submittedQuestion !== null
-      ? askQuestion(submittedQuestion)
+      ? askQuestion(submittedQuestion, role)
       : getConversation(conversationId ?? "service-credit");
     void answerRequest
       .then((answer) => { if (active) setAnswers([answer]); })
@@ -109,14 +111,14 @@ export default function ChatAnswer() {
         if (active) setLoadError(reason instanceof Error ? reason.message : "Unable to load this conversation.");
       });
     return () => { active = false; };
-  }, [conversationId, submittedQuestion]);
+  }, [conversationId, role, submittedQuestion]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!followUp.trim() || submitting) return;
     setSubmitting(true);
     try {
-      const answer = await askQuestion(followUp);
+      const answer = await askQuestion(followUp, role);
       setAnswers((current) => [...current, answer]);
       setLoadError("");
       setFollowUp("");

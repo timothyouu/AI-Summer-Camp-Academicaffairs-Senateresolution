@@ -82,6 +82,34 @@ interface BackendPresignedUploadResponse {
 interface BackendIngestionResponse { upload_id: string; status: IngestionStatus; chunks_added?: number; error?: string; }
 interface BackendTopicSummary { name: string; count: number; }
 interface BackendTopicDetail { name: string; chunks: Array<{ source: string; section: string; excerpt: string }>; }
+interface BackendRegistrySource {
+  id: string;
+  title: string;
+  source_type: RegistrySource["sourceType"];
+  status: RegistrySource["status"];
+  canonical_url: string;
+  edition_year: number | null;
+  is_current: boolean;
+  passages: number;
+  updated_at: string;
+}
+interface BackendPermission {
+  user_email: string;
+  source_type: Permission["sourceType"];
+  can_add: boolean;
+  can_edit: boolean;
+}
+interface BackendDraftRevision {
+  draft_id: string;
+  version: number;
+  revised_text: string;
+  rationale: string;
+  overlaps: BackendResolutionFinding[];
+  duplicates: BackendResolutionFinding[];
+  conflicts: BackendResolutionFinding[];
+  recommendation: string;
+  agent_trace: BackendAgentTrace[];
+}
 
 // Bedrock-backed endpoints (chat, resolution checks) run retrieval plus a
 // multi-agent LLM pipeline server-side and routinely exceed a few seconds.
@@ -95,6 +123,8 @@ const backendRequest = async <T>(path: string, init?: RequestInit, timeoutMs: nu
     const authorizationToken = await getCognitoAuthorizationToken();
     const headers = new Headers(init?.headers);
     if (authorizationToken !== null) headers.set("Authorization", `Bearer ${authorizationToken}`);
+    const demoEmail = window.localStorage.getItem("policy-intelligence.user-email");
+    if (authorizationToken === null && demoEmail !== null) headers.set("X-User-Email", demoEmail);
     const response = await fetch(`${baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     if (!response.ok) return null;
     return await response.json() as T;
@@ -170,8 +200,12 @@ export async function login(role: Role): Promise<LoginResult> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password: "demo123" }),
   });
-  if (result !== null) return result;
+  if (result !== null) {
+    window.localStorage.setItem("policy-intelligence.user-email", email);
+    return result;
+  }
   await delay();
+  window.localStorage.setItem("policy-intelligence.user-email", email);
   return { role, name: role === "reviewer" ? "Jennifer D." : "Alex B." };
 }
 
@@ -216,12 +250,12 @@ const writeConflictState = (state: PersistedConflictMap): void => {
   try { window.localStorage.setItem(conflictStateStorageKey, JSON.stringify(state)); } catch { /* Demo remains usable if storage is unavailable. */ }
 };
 
-export async function askQuestion(text: string): Promise<Answer> {
+export async function askQuestion(text: string, role: Role = "reviewer"): Promise<Answer> {
   const question = text.trim();
   if (!question) throw new Error("Enter a policy question.");
   const backend = await backendRequest<BackendChatResponse>("/api/chat", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-Role": role },
     body: JSON.stringify({ question }),
   }, AGENT_REQUEST_TIMEOUT_MS, agentBaseUrl);
   if (backend !== null) {
@@ -428,6 +462,82 @@ export async function getSources(): Promise<KnowledgeSource[]> {
   return [...uploaded, ...sources.filter((source) => !uploaded.some((item) => item.title.toLowerCase() === source.title.toLowerCase()))].map((source) => ({ ...source }));
 }
 
+export interface RegistrySource {
+  id: string;
+  title: string;
+  sourceType: "handbook" | "cba" | "policystat" | "catalog" | "uploads";
+  status: "active" | "archived";
+  canonicalUrl: string;
+  editionYear: number | null;
+  isCurrent: boolean;
+  passages: number;
+  updated: string;
+}
+
+const mapRegistrySource = (item: BackendRegistrySource): RegistrySource => ({
+  id: item.id,
+  title: item.title,
+  sourceType: item.source_type,
+  status: item.status,
+  canonicalUrl: item.canonical_url,
+  editionYear: item.edition_year,
+  isCurrent: item.is_current,
+  passages: item.passages,
+  updated: new Date(item.updated_at).toLocaleDateString(),
+});
+
+export async function getRegistrySources(): Promise<RegistrySource[]> {
+  const backend = await backendRequest<BackendRegistrySource[]>("/api/sources");
+  return backend === null ? [] : backend.map(mapRegistrySource);
+}
+
+export async function setSourceStatus(id: string, status: "active" | "archived"): Promise<RegistrySource> {
+  const backend = await backendRequest<BackendRegistrySource>(`/api/sources/${encodeURIComponent(id)}/status`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+  if (backend === null) throw new Error("Unable to update the source status.");
+  return mapRegistrySource(backend);
+}
+
+export interface Permission {
+  userEmail: string;
+  sourceType: RegistrySource["sourceType"];
+  canAdd: boolean;
+  canEdit: boolean;
+}
+
+export async function getPermissions(): Promise<Permission[]> {
+  const backend = await backendRequest<BackendPermission[]>("/api/permissions");
+  return backend === null ? [] : backend.map((item) => ({
+    userEmail: item.user_email,
+    sourceType: item.source_type,
+    canAdd: item.can_add,
+    canEdit: item.can_edit,
+  }));
+}
+
+export async function savePermission(permission: Permission): Promise<Permission> {
+  const backend = await backendRequest<BackendPermission>("/api/permissions", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user_email: permission.userEmail,
+      source_type: permission.sourceType,
+      can_add: permission.canAdd,
+      can_edit: permission.canEdit,
+    }),
+  });
+  if (backend === null) throw new Error("Unable to save the permission.");
+  return {
+    userEmail: backend.user_email,
+    sourceType: backend.source_type,
+    canAdd: backend.can_add,
+    canEdit: backend.can_edit,
+  };
+}
+
 export function saveUploadedSource(source: KnowledgeSource): KnowledgeSource {
   const uploaded = readStoredArray<KnowledgeSource>(uploadedSourcesStorageKey);
   const next = [source, ...uploaded.filter((item) => item.title.toLowerCase() !== source.title.toLowerCase())];
@@ -613,5 +723,40 @@ export async function checkResolution(text: string): Promise<ReviewAnalysis> {
       { agent: "verifier", label: "Verifier preserved abstention", status: "complete", detail: "The result correctly avoids ungrounded conclusions." },
       { agent: "escalation", label: "Escalation requested source review", status: "warning", detail: "Connect production retrieval or review the source set manually." },
     ],
+  };
+}
+
+export interface DraftRevision {
+  draftId: string;
+  version: number;
+  revisedText: string;
+  rationale: string;
+  findings: ReviewAnalysis["findings"];
+  recommendation: string;
+  agentTrace: AgentTraceStep[];
+}
+
+export async function reviseDraft(text: string, draftId?: string): Promise<DraftRevision> {
+  const backend = await backendRequest<BackendDraftRevision>("/api/draft/revise", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, ...(draftId === undefined ? {} : { draft_id: draftId }) }),
+  }, AGENT_REQUEST_TIMEOUT_MS, agentBaseUrl);
+  if (backend === null) throw new Error("The drafting assistant is unavailable. Start the backend and try again.");
+  return {
+    draftId: backend.draft_id,
+    version: backend.version,
+    revisedText: backend.revised_text,
+    rationale: backend.rationale,
+    recommendation: backend.recommendation,
+    findings: [
+      ...backend.overlaps.map((finding) => ({ type: "Overlap" as const, source: `${finding.source} • ${finding.section}` })),
+      ...backend.duplicates.map((finding) => ({ type: "Possible duplicate" as const, source: `${finding.source} • ${finding.section}` })),
+      ...backend.conflicts.map((finding) => ({ type: "Conflict" as const, source: `${finding.source} • ${finding.section}` })),
+    ],
+    agentTrace: backend.agent_trace.map(({ citations, ...step }) => ({
+      ...step,
+      ...(citations === undefined ? {} : { citations: citations.map((citation) => ({ id: citation.id, title: citation.source, section: citation.section })) }),
+    })),
   };
 }

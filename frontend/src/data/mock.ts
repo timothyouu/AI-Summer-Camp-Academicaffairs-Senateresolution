@@ -95,7 +95,7 @@ export interface ConflictDetail {
   disclaimer: string;
 }
 
-export type SourceStatus = "Pending" | "Ingesting" | "Ready" | "Failed" | "Processing 64%" | "Needs review";
+export type SourceStatus = "Pending" | "Ingesting" | "Ready" | "Failed" | "Processing 64%" | "Needs review" | "Archived";
 
 export interface KnowledgeSource {
   title: string;
