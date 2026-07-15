@@ -35,6 +35,7 @@ from pathlib import Path
 from aws_cdk import (
     BundlingOptions,
     CfnOutput,
+    CustomResource,
     Duration,
     RemovalPolicy,
     Stack,
@@ -366,7 +367,7 @@ class PolicyIntelligenceStack(Stack):
 
         return collection, kb_role
 
-    def _build_vector_index_custom_resource(self, collection: aoss.CfnCollection, region: str) -> cr.CustomResource:
+    def _build_vector_index_custom_resource(self, collection: aoss.CfnCollection, region: str) -> CustomResource:
         index_role = iam.Role(
             self,
             "VectorIndexProviderRole",
@@ -437,7 +438,7 @@ class PolicyIntelligenceStack(Stack):
             log_retention=logs.RetentionDays.ONE_WEEK,
         )
 
-        resource = cr.CustomResource(
+        resource = CustomResource(
             self,
             "VectorIndexResource",
             service_token=provider.service_token,
@@ -465,7 +466,7 @@ class PolicyIntelligenceStack(Stack):
         corpus_bucket: s3.Bucket,
         collection: aoss.CfnCollection,
         kb_role: iam.Role,
-        vector_index_resource: cr.CustomResource,
+        vector_index_resource: CustomResource,
     ) -> tuple[bedrock.CfnKnowledgeBase, bedrock.CfnDataSource]:
         knowledge_base = bedrock.CfnKnowledgeBase(
             self,
