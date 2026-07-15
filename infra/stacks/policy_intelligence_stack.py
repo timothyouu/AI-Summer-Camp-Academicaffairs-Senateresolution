@@ -581,6 +581,9 @@ class PolicyIntelligenceStack(Stack):
         )
         uploads_table.grant_read_write_data(fn)
         corpus_bucket.grant_read(fn)
+        # The handler deletes oversized uploads/ objects so they cannot ride
+        # along with a later Knowledge Base sync.
+        corpus_bucket.grant_delete(fn, "uploads/*")
         fn.add_to_role_policy(
             iam.PolicyStatement(
                 sid="KbIngestion",

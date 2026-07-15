@@ -24,6 +24,13 @@ def handler(event: dict[str, Any], context: object) -> dict[str, int]:
         # MAX_UPLOAD_BYTES limit is enforced here from the event's object size
         # before any ingestion job is started.
         if int(s3_object.get("size", 0)) > MAX_UPLOAD_BYTES:
+            # Remove the object too: the KB data source includes uploads/, so a
+            # leftover oversized file would ride along with the next sync.
+            bucket_name = str(record["s3"].get("bucket", {}).get("name", ""))
+            if bucket_name:
+                boto3.client("s3", region_name=settings.aws_region).delete_object(
+                    Bucket=bucket_name, Key=unquote_plus(str(s3_object["key"])),
+                )
             store.register(filename, "failed", upload_id=upload_id, error=f"File exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload limit")
             rejected += 1
             continue

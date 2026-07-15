@@ -184,20 +184,32 @@ def test_ingestion_rejects_oversized_objects_before_starting_jobs(monkeypatch: A
         def list_data_sources(self, **_kwargs: object) -> dict[str, object]:
             raise AssertionError("no ingestion should start for an oversized-only event")
 
+    class S3Client:
+        def __init__(self) -> None:
+            self.deleted: list[dict[str, str]] = []
+
+        def delete_object(self, **kwargs: object) -> dict[str, object]:
+            self.deleted.append({"Bucket": str(kwargs["Bucket"]), "Key": str(kwargs["Key"])})
+            return {}
+
     store = Store()
+    s3_client = S3Client()
+    clients = {"bedrock-agent": BedrockClient(), "s3": s3_client}
     monkeypatch.setenv("AWS_REGION", "us-west-2")
     monkeypatch.setenv("BEDROCK_KB_ID", "kb-123")
     monkeypatch.setenv("DDB_UPLOADS_TABLE", "Uploads")
     monkeypatch.setattr(ingestion, "upload_store", lambda: store)
-    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *_args, **_kwargs: BedrockClient()))
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda name, **_kwargs: clients[name]))
 
-    result = ingestion.handler({"Records": [{"s3": {"object": {
-        "key": "uploads%2Fbig-1%2Fhuge.pdf", "size": MAX_UPLOAD_BYTES + 1,
-    }}}]}, object())
+    result = ingestion.handler({"Records": [{"s3": {
+        "bucket": {"name": "corpus-bucket"},
+        "object": {"key": "uploads%2Fbig-1%2Fhuge.pdf", "size": MAX_UPLOAD_BYTES + 1},
+    }}]}, object())
 
     assert result == {"processed": 1}
     assert store.calls[0]["status"] == "failed"
     assert "limit" in str(store.calls[0]["error"])
+    assert s3_client.deleted == [{"Bucket": "corpus-bucket", "Key": "uploads/big-1/huge.pdf"}]
 
 
 def test_ingestion_conflict_preserves_actively_ingesting_records(monkeypatch: Any) -> None:
