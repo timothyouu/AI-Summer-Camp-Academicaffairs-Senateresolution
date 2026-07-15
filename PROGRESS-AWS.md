@@ -15,3 +15,4 @@
 2026-07-15T07:09:28-07:00 review round-11 fixes hit (inline) — event-size upload limit, bearer token on same-backend PUT (47 pytest)
 2026-07-15T07:12:10-07:00 review round-12 — ingesting-record preservation fixed (inline); JWT-500 finding verified false positive, pinned with 401 regression tests (51 pytest)
 2026-07-15T07:14:48-07:00 review round-13 fix hit (inline) — oversized uploads deleted from S3 before rejection + grant_delete (51 pytest)
+2026-07-15T07:17:46-07:00 review round-14 fix hit (inline) — AOSS index creation retries with backoff, provider timeout 10m

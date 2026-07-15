@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -28,6 +29,10 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 SERVICE = "aoss"
+# 403/404/503 (and status 0 = connection failure) are how AOSS presents
+# not-yet-propagated collections/permissions; anything else is a real error.
+RETRYABLE_STATUSES = {0, 403, 404, 503}
+CREATE_RETRY_WINDOW_SECONDS = 480.0
 
 
 def _signed_request(
@@ -78,8 +83,25 @@ def _create_index(endpoint: str, region: str, index_name: str, vector_field: str
             }
         },
     }
-    status, payload = _signed_request("PUT", url, region, body)
-    if status >= 300 and "resource_already_exists_exception" not in payload:
+    # The collection and data-access policy report CloudFormation completion
+    # before the data-plane endpoint and permissions finish propagating, so a
+    # fresh deploy's first PUT often gets a transient 403/404/503. Retry with
+    # backoff until the deadline instead of rolling back the stack.
+    deadline = time.monotonic() + CREATE_RETRY_WINDOW_SECONDS
+    attempt = 0
+    while True:
+        try:
+            status, payload = _signed_request("PUT", url, region, body)
+        except urllib.error.URLError as error:
+            status, payload = 0, str(error)
+        if 0 < status < 300 or "resource_already_exists_exception" in payload:
+            break
+        if status in RETRYABLE_STATUSES and time.monotonic() < deadline:
+            attempt += 1
+            wait = min(30.0, 2.0 ** attempt)
+            logger.info("AOSS index %s not ready yet (%s); retrying in %.0fs", index_name, status or payload, wait)
+            time.sleep(wait)
+            continue
         raise RuntimeError(f"Failed to create AOSS index {index_name!r}: {status} {payload}")
     logger.info("AOSS index %s create response: %s %s", index_name, status, payload)
 

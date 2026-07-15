@@ -424,7 +424,9 @@ class PolicyIntelligenceStack(Stack):
             handler="index.on_event",
             code=_lambda.Code.from_asset(str(INFRA_ROOT / "lambda_src" / "vector_index_provider")),
             role=index_role,
-            timeout=Duration.minutes(2),
+            # Must exceed the provider's 480s create-retry window (AOSS
+            # data-plane propagation on fresh deploys).
+            timeout=Duration.minutes(10),
             log_retention=logs.RetentionDays.ONE_WEEK,
         )
 
