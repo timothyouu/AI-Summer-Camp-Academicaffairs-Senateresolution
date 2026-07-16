@@ -146,7 +146,15 @@ regression, +3 guardrail gating, +1 registry source-type).
   the PRD's "single biggest lever"), blind parallel extractors, structured outputs, abstention.
 
 ## Last Updated
-2026-07-15 (late) — AWS-readiness conformance pass: Bedrock Guardrails built from scratch, role-switcher
+2026-07-16 — Added `implementation-aws.md`: a team-facing AWS account/service setup guide (account
+access via IAM Identity Center, per-service enable steps + IAM permissions + verification commands
+for S3, Bedrock model access/Knowledge Bases/OpenSearch Serverless/Guardrails, DynamoDB, Cognito,
+Lambda + API Gateway, Amplify, EventBridge). It's onboarding-oriented (get a new teammate to
+working AWS access); `AWS_SETUP.md` remains the canonical ordered deploy runbook for this repo's
+own stack — the two overlap by design and should be reconciled or merged later rather than treated
+as duplicates.
+
+Previous: 2026-07-15 (late) — AWS-readiness conformance pass: Bedrock Guardrails built from scratch, role-switcher
  identity desync + registry source-type fixes,
 drafting→Bedrock defect fixed, CORS made configurable, false llm.py/Bedrock Stack claim corrected.
 See the AWS-Readiness Conformance Pass section.
