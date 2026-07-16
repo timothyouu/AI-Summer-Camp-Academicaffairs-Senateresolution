@@ -42,7 +42,14 @@ const hasConfiguredApi = Boolean(import.meta.env.VITE_API_BASE_URL);
 // base so local/dev behavior is byte-for-byte unchanged.
 const agentBaseUrl = (import.meta.env.VITE_AGENT_BASE_URL ?? "").replace(/\/$/, "") || apiBaseUrl;
 
-interface BackendCitation { id: number; source: string; section: string; excerpt: string; }
+interface BackendCitation {
+  id: number;
+  source: string;
+  section: string;
+  excerpt: string;
+  canonical_url?: string;
+  section_url?: string;
+}
 interface BackendChatResponse {
   answer_id: string;
   answer: string;
@@ -97,6 +104,8 @@ interface BackendRegistrySource {
   source_type: RegistrySource["sourceType"];
   status: RegistrySource["status"];
   canonical_url: string;
+  owner: string;
+  section_index: Record<string, string>;
   edition_year: number | null;
   is_current: boolean;
   passages: number;
@@ -287,7 +296,13 @@ export async function askQuestion(text: string, role: Role = "reviewer"): Promis
       question,
       heading: paragraphs[0]?.split(/[.!?]\s/)[0] ?? "Grounded policy response",
       paragraphs,
-      citations: backend.citations.map((citation) => ({ id: citation.id, title: citation.source, section: citation.section })),
+      citations: backend.citations.map((citation) => ({
+        id: citation.id,
+        title: citation.source,
+        section: citation.section,
+        canonicalUrl: citation.canonical_url,
+        sectionUrl: citation.section_url,
+      })),
       ...(backend.conflict?.detected ? { conflictBanner: `Policy conflict — ${backend.conflict.guidance}` } : {}),
     };
   }
@@ -557,6 +572,8 @@ export interface RegistrySource {
   sourceType: "handbook" | "cba" | "policystat" | "catalog" | "uploads";
   status: "active" | "archived";
   canonicalUrl: string;
+  owner: string;
+  sectionIndex: Record<string, string>;
   editionYear: number | null;
   isCurrent: boolean;
   passages: number;
@@ -569,6 +586,8 @@ const mapRegistrySource = (item: BackendRegistrySource): RegistrySource => ({
   sourceType: item.source_type,
   status: item.status,
   canonicalUrl: item.canonical_url,
+  owner: item.owner,
+  sectionIndex: item.section_index,
   editionYear: item.edition_year,
   isCurrent: item.is_current,
   passages: item.passages,
@@ -767,7 +786,13 @@ export async function checkResolution(text: string): Promise<ReviewAnalysis> {
       recommendation: backend.recommendation,
       agentTrace: (Array.isArray(backend.agent_trace) ? backend.agent_trace : reviewAnalysis.agentTrace).map(({ citations, ...step }) => ({
         ...step,
-        ...(citations == null ? {} : { citations: citations.map((citation) => "source" in citation ? { id: citation.id, title: citation.source, section: citation.section } : { ...citation }) }),
+        ...(citations == null ? {} : { citations: citations.map((citation) => "source" in citation ? {
+          id: citation.id,
+          title: citation.source,
+          section: citation.section,
+          canonicalUrl: citation.canonical_url,
+          sectionUrl: citation.section_url,
+        } : { ...citation }) }),
       })),
     };
   }
@@ -845,7 +870,13 @@ export async function reviseDraft(text: string, draftId?: string): Promise<Draft
     ],
     agentTrace: backend.agent_trace.map(({ citations, ...step }) => ({
       ...step,
-      ...(citations == null ? {} : { citations: citations.map((citation) => ({ id: citation.id, title: citation.source, section: citation.section })) }),
+      ...(citations == null ? {} : { citations: citations.map((citation) => ({
+        id: citation.id,
+        title: citation.source,
+        section: citation.section,
+        canonicalUrl: citation.canonical_url,
+        sectionUrl: citation.section_url,
+      })) }),
     })),
   };
 }

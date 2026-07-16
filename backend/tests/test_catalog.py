@@ -69,6 +69,8 @@ def test_bedrock_metadata_identifies_catalog_source_and_edition() -> None:
     assert attributes["source"]["value"]["stringValue"] == "Grade Appeal Policy (2024 Catalog)"
     assert attributes["edition_year"]["value"]["stringValue"] == "2024"
     assert attributes["is_current"]["value"]["stringValue"] == "false"
+    assert attributes["canonical_url"]["value"]["stringValue"] == page.url
+    assert attributes["section_url"]["value"]["stringValue"] == page.url
 
 
 def test_remote_catalog_reregistration_preserves_archived_status() -> None:
@@ -99,3 +101,4 @@ def test_ingest_catalog_registers_active_edition_tagged_sources() -> None:
     assert record is not None
     assert record.status == "active" and record.edition_year == 2024 and record.is_current is False
     assert record.canonical_url == "https://catalog.csub.edu/x"
+    assert record.section_index == {"Grade Appeal Policy": "https://catalog.csub.edu/x"}

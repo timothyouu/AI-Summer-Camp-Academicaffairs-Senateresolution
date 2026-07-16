@@ -3,6 +3,8 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from backend.app.main import app
+from backend.app.models import PermissionUpdate
+from backend.app.permissions import ADMIN_EMAIL, permission_store
 from backend.app.registry import registry_store, seed_registry_from_corpus
 from backend.app.models import SourceUpsert
 
@@ -35,6 +37,79 @@ def test_sources_endpoint_lists_and_flips() -> None:
         flip = client.post("/api/sources/handbook-2025/status", json={"status": "archived"})
         assert flip.status_code == 200 and flip.json()["status"] == "archived"
         assert client.post("/api/sources/missing/status", json={"status": "active"}).status_code == 404
+
+
+def test_source_editor_grant_controls_lifecycle_changes() -> None:
+    with TestClient(app) as client:
+        registry_store().upsert(SourceUpsert(
+            id="owned-cba", title="Owned CBA", source_type="cba", status="active",
+        ))
+        permission_store().grant(
+            PermissionUpdate(
+                user_email="writer@campus.edu", source_type="cba",
+                can_add=False, can_edit=False,
+            ),
+            granted_by=ADMIN_EMAIL,
+        )
+        headers = {"X-User-Email": "writer@campus.edu", "X-Role": "reviewer"}
+        denied = client.post("/api/sources/owned-cba/status", json={"status": "archived"}, headers=headers)
+        assert denied.status_code == 403
+
+        permission_store().grant(
+            PermissionUpdate(
+                user_email="writer@campus.edu", source_type="cba",
+                can_add=False, can_edit=True,
+            ),
+            granted_by=ADMIN_EMAIL,
+        )
+        allowed = client.post("/api/sources/owned-cba/status", json={"status": "archived"}, headers=headers)
+        assert allowed.status_code == 200
+        assert allowed.json()["status"] == "archived"
+
+
+def test_source_owner_can_change_lifecycle_without_type_grant() -> None:
+    with TestClient(app) as client:
+        registry_store().upsert(SourceUpsert(
+            id="owner-policy", title="Owner Policy", source_type="handbook", status="active",
+            owner="owner@campus.edu",
+        ))
+        response = client.post(
+            "/api/sources/owner-policy/status",
+            json={"status": "archived"},
+            headers={"X-User-Email": "owner@campus.edu", "X-Role": "reviewer"},
+        )
+        assert response.status_code == 200
+
+
+def test_employee_cannot_change_source_lifecycle() -> None:
+    with TestClient(app) as client:
+        registry_store().upsert(SourceUpsert(
+            id="employee-policy", title="Employee Policy", source_type="handbook", status="active",
+        ))
+        response = client.post(
+            "/api/sources/employee-policy/status",
+            json={"status": "archived"},
+            headers={"X-User-Email": "employee@campus.edu", "X-Role": "reviewer"},
+        )
+        assert response.status_code == 403
+
+
+def test_employee_catalog_only_lists_active_sources() -> None:
+    with TestClient(app) as client:
+        registry_store().upsert(SourceUpsert(
+            id="employee-active", title="Employee Active", source_type="handbook", status="active",
+        ))
+        registry_store().upsert(SourceUpsert(
+            id="employee-archived", title="Employee Archived", source_type="handbook", status="archived",
+        ))
+        response = client.get(
+            "/api/sources",
+            headers={"X-User-Email": "employee@campus.edu"},
+        )
+        assert response.status_code == 200
+        ids = {item["id"] for item in response.json()}
+        assert "employee-active" in ids
+        assert "employee-archived" not in ids
 
 
 def test_seed_marks_uploads_archived(tmp_path, monkeypatch) -> None:

@@ -25,7 +25,28 @@ def role_from_claims(claims: dict[str, Any]) -> Role:
     groups = claims.get("cognito:groups", [])
     if isinstance(groups, str):
         groups = [groups]
-    return "reviewer" if "makers" in groups else "employee"
+    return "reviewer" if {"admins", "makers"}.intersection(groups) else "employee"
+
+
+def request_role(
+    authorization: str | None,
+    x_role: str | None = None,
+    x_user_email: str | None = None,
+) -> Role:
+    """Resolve role from verified claims, then the identified local demo account."""
+    settings = get_settings()
+    if settings.cognito_aws and authorization and authorization.startswith("Bearer "):
+        try:
+            return role_from_claims(
+                decode_and_verify_token(authorization.removeprefix("Bearer ").strip(), settings)
+            )
+        except (ValueError, URLError, KeyError, json.JSONDecodeError):
+            return "employee"
+    if x_user_email:
+        account = DEMO_ACCOUNTS.get(x_user_email.lower().strip())
+        if account is not None:
+            return account[1]
+    return "employee" if x_role == "employee" else "reviewer"
 
 
 def _decode_segment(value: str) -> bytes:

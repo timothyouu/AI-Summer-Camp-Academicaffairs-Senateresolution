@@ -2,6 +2,12 @@
 
 A customer-ready policy assistant for exploring CSUB academic policy, asking source-grounded questions, checking draft resolutions, recording conflicts, browsing topics, and uploading PDF/Markdown/text sources. It runs with deterministic local retrieval and SQLite by default; environment variables activate Bedrock, DynamoDB, S3, Cognito, and the Strands agent pipeline without changing API contracts.
 
+Source governance is enforced at the API boundary: Cognito `admins` manage
+per-user grants, source owners and reviewer/writers need `can_edit` to change
+existing sources, and `can_add` alone cannot replace a source. Registry entries
+carry canonical URLs plus a section-link index; chat citations and the shared
+resource catalog resolve through that same metadata.
+
 ## Run locally
 
 From the repository root:

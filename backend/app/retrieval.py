@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
+from urllib.parse import urlsplit, urlunsplit
 
 import numpy as np
 
@@ -20,6 +21,8 @@ class SearchResult:
     page: int | None
     topic: str
     score: float
+    canonical_url: str = ""
+    section_url: str = ""
 
 
 class IndexStore:
@@ -67,6 +70,12 @@ class IndexStore:
                 page=int(chunk["page"]) if chunk.get("page") is not None else None,
                 topic=str(chunk.get("topic", "senate procedures")),
                 score=float(scores[int(index)]),
+                canonical_url=str(chunk.get("canonical_url", "")),
+                section_url=_section_link(
+                    str(chunk.get("canonical_url", "")),
+                    str(chunk.get("section", "Document")),
+                    int(chunk["page"]) if chunk.get("page") is not None else None,
+                ),
             ))
         return results
 
@@ -75,6 +84,21 @@ INDEX = IndexStore()
 
 
 ARCHIVED_EDITION_WEIGHT = 0.5
+
+
+def _section_link(
+    canonical_url: str,
+    section: str,
+    page: int | None,
+    section_index: dict[str, str] | None = None,
+) -> str:
+    indexed = (section_index or {}).get(section, "")
+    if indexed:
+        return indexed
+    if not canonical_url or page is None:
+        return canonical_url
+    parts = urlsplit(canonical_url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, f"page={page}"))
 
 
 def reload_index() -> None:
@@ -113,6 +137,10 @@ def apply_registry_policy(results: list[SearchResult], k: int) -> list[SearchRes
         )
         if record is not None and record.status == "archived":
             continue
+        if record is not None:
+            canonical_url = record.canonical_url or item.canonical_url
+            section_url = _section_link(canonical_url, item.section, item.page, record.section_index)
+            item = replace(item, canonical_url=canonical_url, section_url=section_url)
         if record is not None and not record.is_current:
             item = replace(item, score=item.score * ARCHIVED_EDITION_WEIGHT)
         kept.append(item)
@@ -151,5 +179,11 @@ def _search_knowledge_base(query: str, k: int) -> list[SearchResult]:
             page=int(page_value) if page_value is not None else None,
             topic=str(metadata.get("topic", "senate procedures")),
             score=float(item.get("score", 0.0)),
+            canonical_url=str(metadata.get("canonical_url", "")),
+            section_url=str(metadata.get("section_url") or _section_link(
+                str(metadata.get("canonical_url", "")),
+                str(metadata.get("section", "Document")),
+                int(page_value) if page_value is not None else None,
+            )),
         ))
     return results

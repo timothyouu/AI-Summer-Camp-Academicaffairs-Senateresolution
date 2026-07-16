@@ -165,5 +165,17 @@ export function roleFromIdToken(idToken: string): Role {
   if (typeof payload !== "object" || payload === null || !("cognito:groups" in payload)) return "employee";
   const groups = payload["cognito:groups"];
   if (!Array.isArray(groups) || !groups.every((group): group is string => typeof group === "string")) return "employee";
-  return groups.includes("makers") ? "reviewer" : "employee";
+  return groups.includes("admins") || groups.includes("makers") ? "reviewer" : "employee";
+}
+
+export function currentUserIsSourceAdmin(): boolean {
+  if (!cognitoEnabled) {
+    return window.localStorage.getItem("policy-intelligence.user-email") === "reviewer@campus.edu";
+  }
+  const tokens = storedTokens();
+  if (tokens === null) return false;
+  const payload = decodeJwtPayload(tokens.id_token);
+  if (typeof payload !== "object" || payload === null || !("cognito:groups" in payload)) return false;
+  const groups = payload["cognito:groups"];
+  return Array.isArray(groups) && groups.includes("admins");
 }

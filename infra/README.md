@@ -209,7 +209,7 @@ Lambda roles, etc.) — approve them.
      --output text)"
    backend/.venv/bin/python -m backend.scripts.seed_conflicts
    ```
-4. **Create the two demo users** (CloudFormation/CDK cannot set a Cognito
+4. **Create the three demo users** (CloudFormation/CDK cannot set a Cognito
    user's password — `AdminSetUserPassword` is an imperative API call, not a
    declarative resource):
    ```bash
@@ -228,7 +228,9 @@ Lambda roles, etc.) — approve them.
      --user-pool-id <CognitoUserPoolId> \
      --username employee@example.edu --group-name employees
 
-   # repeat with --group-name makers and a reviewer@example.edu username for the maker demo account
+   # Repeat for reviewer@example.edu with --group-name makers.
+   # Repeat for source-admin@example.edu with --group-name admins. Admins can
+   # manage permission grants and bypass per-source add/edit checks.
    ```
 5. **Configure Amplify Hosting.** Connect the `prod` branch. The repository's
    root `amplify.yml` selects `appRoot: frontend`, runs `npm ci` and

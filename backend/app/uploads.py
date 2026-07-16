@@ -6,13 +6,13 @@ from typing import Any
 from urllib.parse import urlencode
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile, status
 
 from .auth import require_reviewer
 from .config import MAX_UPLOAD_BYTES, UPLOAD_DIR, ensure_data_directories, get_settings
 from .ingest import append_to_index
 from .models import IngestionResponse, PresignedUploadRequest, PresignedUploadResponse, SourceUpsert, UploadResponse
-from .permissions import require_can_add_sources
+from .permissions import authorize_source_write
 from .retrieval import reload_index
 from .stores import UploadRecord, UploadStore, upload_store
 
@@ -33,13 +33,15 @@ def _safe_filename(filename: str) -> str:
 @router.post("/upload", response_model=UploadResponse, response_model_exclude_none=True, status_code=status.HTTP_201_CREATED)
 async def upload(
     file: UploadFile = File(...),
+    authorization: str | None = Header(default=None),
+    x_user_email: str | None = Header(default=None),
     _: None = Depends(require_reviewer),
-    __: None = Depends(require_can_add_sources),
 ) -> UploadResponse:
     try:
         filename = _safe_filename(file.filename or "")
     except ValueError as error:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
+    authorize_source_write(Path(filename).stem.lower(), authorization, x_user_email)
     suffix = Path(filename).suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Upload a PDF, MD, or TXT file")
@@ -68,13 +70,15 @@ async def upload(
 async def direct_upload(
     request: Request,
     filename: str,
+    authorization: str | None = Header(default=None),
+    x_user_email: str | None = Header(default=None),
     _: None = Depends(require_reviewer),
-    __: None = Depends(require_can_add_sources),
 ) -> UploadResponse:
     try:
         safe_filename = _safe_filename(filename)
     except ValueError as error:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
+    authorize_source_write(Path(safe_filename).stem.lower(), authorization, x_user_email)
     if Path(safe_filename).suffix.lower() not in ALLOWED_SUFFIXES:
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Upload a PDF, MD, or TXT file")
     content = await request.body()
@@ -99,13 +103,15 @@ def _save_local_upload(filename: str, content: bytes) -> UploadResponse:
 async def presign_upload(
     payload: PresignedUploadRequest,
     request: Request,
+    authorization: str | None = Header(default=None),
+    x_user_email: str | None = Header(default=None),
     _: None = Depends(require_reviewer),
-    __: None = Depends(require_can_add_sources),
 ) -> PresignedUploadResponse:
     try:
         filename = _safe_filename(payload.filename)
     except ValueError as error:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
+    authorize_source_write(Path(filename).stem.lower(), authorization, x_user_email)
     if Path(filename).suffix.lower() not in ALLOWED_SUFFIXES:
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Upload a PDF, MD, or TXT file")
     settings = get_settings()

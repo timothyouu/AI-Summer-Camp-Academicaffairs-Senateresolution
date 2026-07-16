@@ -1,16 +1,20 @@
 import { useEffect, useState } from "react";
 import { getPermissions, savePermission, type Permission } from "../api";
+import { currentUserIsSourceAdmin } from "../auth/cognito";
 
 const SOURCE_TYPES: Permission["sourceType"][] = ["handbook", "cba", "policystat", "catalog", "uploads"];
 
 export default function SourcePermissions() {
+  const isAdmin = currentUserIsSourceAdmin();
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
-    void getPermissions().then(setPermissions).catch(() => setPermissions([]));
-  }, []);
+    if (isAdmin) void getPermissions().then(setPermissions).catch(() => setPermissions([]));
+  }, [isAdmin]);
+
+  if (!isAdmin) return null;
 
   const users = [...new Set(permissions.map((item) => item.userEmail))];
   const cell = (user: string, sourceType: Permission["sourceType"]): Permission =>

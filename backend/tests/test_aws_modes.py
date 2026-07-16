@@ -113,6 +113,7 @@ def test_dynamodb_conflict_list_paginates_scans(monkeypatch: Any) -> None:
 
 def test_cognito_group_role_mapping() -> None:
     assert role_from_claims({"cognito:groups": ["makers"]}) == "reviewer"
+    assert role_from_claims({"cognito:groups": ["admins"]}) == "reviewer"
     assert role_from_claims({"cognito:groups": ["employees"]}) == "employee"
 
 

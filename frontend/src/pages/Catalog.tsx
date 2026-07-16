@@ -40,7 +40,7 @@ export default function Catalog() {
       <ul className="mt-6 divide-y divide-navy/10">
         {visible.map((source) => (
           <li key={source.id} className="flex items-center justify-between py-4">
-            <div>
+            <div className="min-w-0 flex-1">
               <p className="text-lg font-medium">
                 {source.title}
                 {source.editionYear !== null && !source.isCurrent && (
@@ -48,6 +48,16 @@ export default function Catalog() {
                 )}
               </p>
               <p className="text-sm text-inkmuted">{source.sourceType.toUpperCase()} · {source.passages.toLocaleString()} passages</p>
+              {source.owner && <p className="mt-1 text-xs text-inkmuted">Owner: {source.owner}</p>}
+              {Object.entries(source.sectionIndex).length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                  {Object.entries(source.sectionIndex).map(([section, url]) => (
+                    <a key={section} href={url} target="_blank" rel="noreferrer" className="text-xs text-brand-blue hover:underline">
+                      {section} ↗
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-4">
               {role === "reviewer" && (

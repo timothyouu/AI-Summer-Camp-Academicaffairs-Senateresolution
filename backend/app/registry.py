@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 
-from .auth import require_reviewer
+from .auth import request_role
 from .dynamodb_client import get_dynamodb_client
 from .config import CORPUS_DIR, UPLOAD_DIR, get_settings
 from .database import connection, initialize_database
 from .ingest import _parse_front_matter, discover_corpus_files
 from .models import SourceLifecycleStatus, SourceRecord, SourceStatusUpdate, SourceUpsert
+from .permissions import require_can_edit_source
 from .stores import _ddb_decode, _ddb_encode
 
 router = APIRouter(prefix="/api/sources", tags=["source registry"])
@@ -19,9 +21,23 @@ router = APIRouter(prefix="/api/sources", tags=["source registry"])
 
 def _record(values: dict[str, object]) -> SourceRecord:
     updated = values.get("updated_at")
+    raw_section_index = values.get("section_index", {})
+    if isinstance(raw_section_index, str):
+        try:
+            decoded_section_index = json.loads(raw_section_index)
+        except json.JSONDecodeError:
+            decoded_section_index = {}
+    else:
+        decoded_section_index = raw_section_index
+    section_index = (
+        {str(key): str(value) for key, value in decoded_section_index.items()}
+        if isinstance(decoded_section_index, dict)
+        else {}
+    )
     return SourceRecord(
         id=str(values["id"]), title=str(values["title"]), source_type=str(values["source_type"]),  # type: ignore[arg-type]
         status=str(values["status"]), canonical_url=str(values.get("canonical_url", "")),  # type: ignore[arg-type]
+        owner=str(values.get("owner", "")), section_index=section_index,
         edition_year=int(values["edition_year"]) if values.get("edition_year") not in (None, "") else None,
         is_current=bool(int(values.get("is_current", 1))), s3_key=str(values.get("s3_key", "")),
         passages=int(values.get("passages", 0)),
@@ -54,13 +70,15 @@ class SQLiteRegistryStore:
     def upsert(self, record: SourceUpsert) -> SourceRecord:
         with connection() as database:
             database.execute(
-                "INSERT INTO registry(id,title,source_type,status,canonical_url,edition_year,is_current,s3_key,passages) "
-                "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,"
+                "INSERT INTO registry(id,title,source_type,status,canonical_url,owner,section_index,edition_year,is_current,s3_key,passages) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,"
                 "source_type=excluded.source_type,status=excluded.status,canonical_url=excluded.canonical_url,"
+                "owner=excluded.owner,section_index=excluded.section_index,"
                 "edition_year=excluded.edition_year,is_current=excluded.is_current,s3_key=excluded.s3_key,"
                 "passages=excluded.passages,updated_at=CURRENT_TIMESTAMP",
                 (record.id, record.title, record.source_type, record.status, record.canonical_url,
-                 record.edition_year, int(record.is_current), record.s3_key, record.passages),
+                 record.owner, json.dumps(record.section_index, sort_keys=True), record.edition_year,
+                 int(record.is_current), record.s3_key, record.passages),
             )
         stored = self.get(record.id)
         if stored is None:
@@ -106,6 +124,7 @@ class DynamoDBRegistryStore:
     def upsert(self, record: SourceUpsert) -> SourceRecord:
         now = datetime.now(timezone.utc).isoformat()
         values: dict[str, object] = {**record.model_dump(), "is_current": int(record.is_current),
+                                     "section_index": json.dumps(record.section_index, sort_keys=True),
                                      "edition_year": record.edition_year or "", "updated_at": now}
         self.client.put_item(TableName=self.table, Item=_ddb_encode(values))  # type: ignore[attr-defined]
         return _record({**values, "edition_year": record.edition_year})
@@ -126,7 +145,9 @@ def _seed_id(path: Path) -> str:
 
 
 def register_document(path: Path, *, status: SourceLifecycleStatus, source_type: str | None = None,
-                      canonical_url: str = "", edition_year: int | None = None, is_current: bool = True,
+                      canonical_url: str = "", owner: str = "",
+                      section_index: dict[str, str] | None = None,
+                      edition_year: int | None = None, is_current: bool = True,
                       passages: int = 0) -> SourceRecord:
     """Create a registry entry without erasing lifecycle or catalog metadata on reseed."""
     text = path.read_text(encoding="utf-8", errors="replace") if path.suffix.lower() in {".md", ".txt"} else ""
@@ -156,11 +177,22 @@ def register_document(path: Path, *, status: SourceLifecycleStatus, source_type:
         else existing.is_current if existing is not None
         else is_current
     )
+    resolved_canonical_url = (
+        canonical_url
+        or metadata.get("canonical_url", "")
+        or (existing.canonical_url if existing is not None else "")
+    )
+    resolved_section_index = section_index or (existing.section_index if existing is not None else {})
+    metadata_section = metadata.get("section", "")
+    if not resolved_section_index and metadata_section and resolved_canonical_url:
+        resolved_section_index = {metadata_section: resolved_canonical_url}
     return store.upsert(SourceUpsert(
         id=_seed_id(path), title=metadata.get("title", path.stem),
         source_type=resolved_type,  # type: ignore[arg-type]
         status=existing.status if existing is not None else status,
-        canonical_url=canonical_url or metadata.get("canonical_url", ""),
+        canonical_url=resolved_canonical_url,
+        owner=owner or metadata.get("owner", "") or (existing.owner if existing is not None else ""),
+        section_index=resolved_section_index,
         edition_year=resolved_edition_year, is_current=resolved_is_current,
         passages=passages or (existing.passages if existing is not None else 0),
     ))
@@ -174,12 +206,23 @@ def seed_registry_from_corpus() -> None:
 
 
 @router.get("", response_model=list[SourceRecord])
-def list_sources() -> list[SourceRecord]:
-    return registry_store().list()
+def list_sources(
+    authorization: str | None = Header(default=None),
+    x_role: str | None = Header(default=None),
+    x_user_email: str | None = Header(default=None),
+) -> list[SourceRecord]:
+    records = registry_store().list()
+    if request_role(authorization, x_role, x_user_email) == "employee":
+        return [record for record in records if record.status == "active"]
+    return records
 
 
 @router.post("/{source_id}/status", response_model=SourceRecord)
-def update_source_status(source_id: str, payload: SourceStatusUpdate, _: None = Depends(require_reviewer)) -> SourceRecord:
+def update_source_status(
+    source_id: str,
+    payload: SourceStatusUpdate,
+    _: None = Depends(require_can_edit_source),
+) -> SourceRecord:
     record = registry_store().set_status(source_id, payload.status)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")

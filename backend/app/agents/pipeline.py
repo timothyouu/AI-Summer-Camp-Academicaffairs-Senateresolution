@@ -37,7 +37,10 @@ class ModuleLLM:
 
 
 def _citation(index: int, passage: GroundedPassage) -> Citation:
-    return Citation(id=index, source=passage.source, section=passage.section, excerpt=passage.span)
+    return Citation(
+        id=index, source=passage.source, section=passage.section, excerpt=passage.span,
+        canonical_url=passage.canonical_url, section_url=passage.section_url,
+    )
 
 
 class AgentPipeline:
@@ -80,7 +83,11 @@ class AgentPipeline:
 
     @staticmethod
     def _passage(item: SearchResult) -> GroundedPassage:
-        return GroundedPassage(text=item.text, span=item.text, source=item.source, section=item.section, doc_type=item.doc_type, topic=item.topic, page=item.page)
+        return GroundedPassage(
+            text=item.text, span=item.text, source=item.source, section=item.section,
+            doc_type=item.doc_type, topic=item.topic, page=item.page,
+            canonical_url=item.canonical_url, section_url=item.section_url,
+        )
 
     def _extract_blind(self, passages: list[GroundedPassage]) -> list[Claim]:
         by_source: dict[str, list[GroundedPassage]] = defaultdict(list)

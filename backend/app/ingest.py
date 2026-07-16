@@ -46,6 +46,7 @@ class Chunk:
     doc_type: str
     page: int | None
     topic: str
+    canonical_url: str = ""
 
 
 def _parse_front_matter(text: str) -> tuple[dict[str, str], str]:
@@ -99,9 +100,10 @@ def build_chunks(paths: Iterable[Path]) -> list[Chunk]:
             source = metadata.get("title", path.stem)
             section = metadata.get("section", f"Page {page}" if page is not None else "Document")
             doc_type = metadata.get("source_type", path.suffix.lower().lstrip("."))
+            canonical_url = metadata.get("canonical_url", "")
             for index, text in enumerate(chunk_text(body)):
                 chunk_id = f"{path.stem}:{page or 0}:{index}"
-                chunks.append(Chunk(chunk_id, text, source, section, doc_type, page, assign_topic(text)))
+                chunks.append(Chunk(chunk_id, text, source, section, doc_type, page, assign_topic(text), canonical_url))
     return chunks
 
 

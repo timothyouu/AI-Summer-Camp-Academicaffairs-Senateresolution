@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS registry (
     source_type TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'archived',
     canonical_url TEXT NOT NULL DEFAULT '',
+    owner TEXT NOT NULL DEFAULT '',
+    section_index TEXT NOT NULL DEFAULT '{}',
     edition_year INTEGER,
     is_current INTEGER NOT NULL DEFAULT 1,
     s3_key TEXT NOT NULL DEFAULT '',
@@ -122,3 +124,11 @@ def initialize_database() -> None:
                 SELECT filename, filename, status, chunks_added, created_at FROM uploads_legacy;
                 DROP TABLE uploads_legacy;
             """)
+        registry_columns = {
+            str(row["name"])
+            for row in database.execute("PRAGMA table_info(registry)").fetchall()
+        }
+        if "owner" not in registry_columns:
+            database.execute("ALTER TABLE registry ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+        if "section_index" not in registry_columns:
+            database.execute("ALTER TABLE registry ADD COLUMN section_index TEXT NOT NULL DEFAULT '{}'")

@@ -1,9 +1,11 @@
 export type Role = "employee" | "reviewer";
 
 export interface Citation {
-  id: number;
-  title: string;
-  section: string;
+    id: number;
+    title: string;
+    section: string;
+    canonicalUrl?: string;
+    sectionUrl?: string;
 }
 
 export interface Answer {

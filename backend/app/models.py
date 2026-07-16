@@ -25,6 +25,8 @@ class Citation(BaseModel):
     source: str
     section: str
     excerpt: str = ""
+    canonical_url: str = ""
+    section_url: str = ""
 
 
 AgentName = Literal["orchestrator", "retrieval", "extractor", "conflict", "verifier", "escalation"]
@@ -241,6 +243,8 @@ class SourceUpsert(BaseModel):
     source_type: SourceType
     status: SourceLifecycleStatus = "archived"
     canonical_url: str = ""
+    owner: str = ""
+    section_index: dict[str, str] = Field(default_factory=dict)
     edition_year: int | None = None
     is_current: bool = True
     s3_key: str = ""
