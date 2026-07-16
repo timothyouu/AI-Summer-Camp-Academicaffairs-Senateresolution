@@ -31,7 +31,7 @@ ESCALATION = "Multiple answers — consult your dean or the Provost's office."
 # and read as a hang. Cap the number verified and run them concurrently so
 # worst-case latency is bounded regardless of corpus size. Candidates are
 # ordered by the detector; the cap keeps the highest-ranked ones.
-MAX_VERIFIED_CONTRADICTIONS = 12
+MAX_VERIFIED_CONTRADICTIONS = 6
 _VERIFY_MAX_WORKERS = 8
 
 
@@ -207,8 +207,22 @@ class AgentPipeline:
         with ThreadPoolExecutor(max_workers=min(_VERIFY_MAX_WORKERS, len(analyses))) as executor:
             return list(executor.map(lambda item: self._verify(item, passages), analyses))
 
+    @staticmethod
+    def _relevant_passages(analysis: ConflictAnalysis, passages: list[GroundedPassage]) -> list[GroundedPassage]:
+        """Only the passages backing this pair's two claims.
+
+        Verification just needs to re-read the two quoted claims in context, not
+        the whole retrieval set. Sending every passage made each call large and
+        slow; scoping to the relevant source+section keeps the prompt small.
+        Falls back to all passages if nothing matches (grounding then fails safe).
+        """
+        keys = {(claim.source, claim.section) for claim in (analysis.claim_a, analysis.claim_b) if claim is not None}
+        relevant = [passage for passage in passages if (passage.source, passage.section) in keys]
+        return relevant or passages
+
     def _verify(self, analysis: ConflictAnalysis, passages: list[GroundedPassage]) -> VerifiedConflict:
         claims = [claim for claim in (analysis.claim_a, analysis.claim_b) if claim is not None]
+        passages = self._relevant_passages(analysis, passages)
         grounded = len(claims) == 2 and all(any(claim.source == passage.source and claim.section == passage.section and span_is_grounded(claim.citation_span, passage.text) for passage in passages) for claim in claims)
         context_valid = False
         if grounded:
