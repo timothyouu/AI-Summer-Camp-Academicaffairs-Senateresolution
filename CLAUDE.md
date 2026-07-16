@@ -145,8 +145,41 @@ regression, +3 guardrail gating, +1 registry source-type).
   `VITE_AGENT_BASE_URL`. Implemented already: programmatic span verification (`agents/verification.py`,
   the PRD's "single biggest lever"), blind parallel extractors, structured outputs, abstention.
 
+## Teammate MVP Branch Merge (2026-07-16)
+Merged PR #4 (`feature/mvp-permissions-citation-links`) into `main` (real merge commit) and hardened it.
+Verifier is now **127 backend tests** + `cd frontend && npx tsc --noEmit && npm run build`.
+- **What the branch adds:** enforced source archive/unarchive lifecycle (registry-backed, retrieval drops
+  archived), per-user source permissions on uploads/lifecycle (`authorize_source_write` replaces the old
+  blanket `require_can_add_sources`), canonical/section links on citations and catalog entries
+  (`canonical_url`/`section_url` through ingest → index → retrieval → chat, registry `section_index`
+  overrides), and a persistent reviewer drafting workspace (save/reopen/compare/restore, SQLite locally,
+  DynamoDB + S3 copy under `drafts/{id}/v{n}.md` when `DDB_DRAFTS_TABLE`/corpus bucket are set).
+- **Conflict resolution:** `drafting.py::llm_revision` keeps main's `llm: LLM` first param (revision must
+  reach the pipeline's selected Bedrock LLM — the fe4cb1a fix) *and* the branch's `instruction` param.
+- **Startup now re-indexes the corpus every boot** (branch removed the `INDEX.size == 0` guard,
+  deliberately — a persisted index can be stale). Consequence: corrupt corpus files must not crash
+  startup, so `build_chunks` skips unreadable files with a warning. AWS mode (`BEDROCK_KB_ID`) skips
+  local indexing entirely.
+- **Post-merge hardening (Codex-reviewed twice):** draft routes are owner-scoped — reads/appends/
+  restores/compares 403 on another user's draft unless the requester is `ADMIN_EMAIL`; `list_drafts` is
+  filtered per requester; appends by the admin preserve the original owner (regression-tested). The
+  three remaining `datetime.fromisoformat` call sites (drafting/permissions/registry) now use
+  `stores._timestamp` (Python 3.10 trailing-Z issue). `apply_registry_policy` logs a warning when the
+  registry is unreachable instead of silently passing results through.
+- **Accepted trade-offs (reviewed, deliberately not "fixed"):** registry-failure retrieval stays
+  fail-open (availability over strictness, documented in the docstring); draft ownership check and
+  append are not atomic (single-process demo); 403 vs 404 leaks draft existence to reviewers; headerless
+  local requests resolve to the `local-reviewer` identity and pass permission checks (documented round-2
+  design). Codex's "rtp/ taxonomy drift" finding was a false positive — `prepare_corpus.py`'s second
+  field is an S3 prefix vocabulary, not the registry taxonomy; rtp files seeding as `uploads` locally is
+  the verified 3/3/3/7 split.
+
 ## Last Updated
-2026-07-16 — Added `implementation-aws.md`: a team-facing AWS account/service setup guide (account
+2026-07-16 — Merged teammate PR #4 (source lifecycle, per-user permissions, citation links, persistent
+drafting workspace) into `main` and `prod`, resolved the `llm_revision` conflict, fixed merge seams,
+added draft owner scoping + S3 draft-copy regression test. See the Teammate MVP Branch Merge section.
+
+Previous: 2026-07-16 — Added `implementation-aws.md`: a team-facing AWS account/service setup guide (account
 access via IAM Identity Center, per-service enable steps + IAM permissions + verification commands
 for S3, Bedrock model access/Knowledge Bases/OpenSearch Serverless/Guardrails, DynamoDB, Cognito,
 Lambda + API Gateway, Amplify, EventBridge). It's onboarding-oriented (get a new teammate to

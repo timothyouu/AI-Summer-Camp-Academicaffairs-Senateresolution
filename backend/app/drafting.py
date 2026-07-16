@@ -289,8 +289,13 @@ def revise_draft(
     _: None = Depends(require_reviewer),
 ) -> DraftReviseResponse:
     requester = _requester(authorization, x_user_email)
+    owner = requester
     if payload.draft_id:
-        _ensure_owner_access(draft_store().list_versions(payload.draft_id), requester)
+        existing = draft_store().list_versions(payload.draft_id)
+        _ensure_owner_access(existing, requester)
+        if existing:
+            # Appends (including admin ones) must not transfer ownership.
+            owner = _owner_of(existing[-1])
     draft_id = payload.draft_id or str(uuid4())
     pipeline = create_pipeline()
     result = pipeline.run(payload.text, draft=True)
@@ -307,7 +312,6 @@ def revise_draft(
         revised, rationale = deterministic_revision(
             payload.text, conflicts, output.recommendation, payload.instruction,
         )
-    owner = requester
     version = draft_store().add_version(
         draft_id, revised, rationale, title=payload.title.strip(), owner=owner,
         status=payload.status, source_text=payload.text, instruction=payload.instruction.strip(),
@@ -342,9 +346,12 @@ def save_draft(
     _: None = Depends(require_reviewer),
 ) -> DraftVersion:
     requester = _requester(authorization, x_user_email)
-    if payload.draft_id:
-        _ensure_owner_access(draft_store().list_versions(payload.draft_id), requester)
     owner = requester
+    if payload.draft_id:
+        existing = draft_store().list_versions(payload.draft_id)
+        _ensure_owner_access(existing, requester)
+        if existing:
+            owner = _owner_of(existing[-1])
     return draft_store().add_version(
         payload.draft_id or str(uuid4()), payload.text, "Saved manually.",
         title=payload.title.strip(), owner=owner, status=payload.status,
@@ -407,7 +414,7 @@ def restore_draft_version(
     requester = _requester(authorization, x_user_email)
     _ensure_owner_access(versions, requester)
     latest = versions[-1]
-    owner = identity_email(authorization, x_user_email) or latest.owner or "local-reviewer"
+    owner = _owner_of(latest)
     return draft_store().add_version(
         draft_id, selected.text, f"Restored from version {version}.",
         title=(payload.title or latest.title).strip(), owner=owner, status=latest.status,

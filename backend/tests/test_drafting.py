@@ -352,3 +352,25 @@ def test_list_drafts_hides_other_users_drafts_from_non_admins() -> None:
     everything = list_drafts(None, ADMIN_EMAIL)
     all_ids = {item.draft_id for item in everything}
     assert {mine.draft_id, theirs.draft_id}.issubset(all_ids)
+
+
+def test_admin_append_preserves_original_owner() -> None:
+    created = save_draft(
+        DraftSaveRequest(text="Owner keeps this draft.", title="Ownership Draft"),
+        None, "owner-e@campus.edu",
+    )
+
+    restored = restore_draft_version(
+        created.draft_id, created.version, DraftRestoreRequest(), None, ADMIN_EMAIL,
+    )
+    assert restored.owner == "owner-e@campus.edu"
+
+    appended = save_draft(
+        DraftSaveRequest(draft_id=created.draft_id, text="Admin touch-up.", title="Ownership Draft"),
+        None, ADMIN_EMAIL,
+    )
+    assert appended.owner == "owner-e@campus.edu"
+
+    # The original owner still sees and controls the draft afterwards.
+    visible = {item.draft_id for item in list_drafts(None, "owner-e@campus.edu")}
+    assert created.draft_id in visible
