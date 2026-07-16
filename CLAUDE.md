@@ -14,7 +14,7 @@ Target is **AWS-real, not local**. Per Tim: "I want most of it to not be local. 
 - Frontend: React (Vite, TypeScript strict) + Tailwind CSS
 - Backend: FastAPI (Python, typed)
 - Database: SQLite (conflict log, upload registry); NumPy + JSON on-disk vector index
-- AI/ML: AWS Bedrock via boto3 — Titan Text Embeddings V2 + Claude (Converse API); all calls isolated in `backend/app/llm.py` (Gemini is the designated fallback if Bedrock access falls through)
+- AI/ML: dual-mode. **Local (default):** `backend/app/llm.py` builds deterministic hash-based embeddings, and its `generate()` deliberately raises — every route falls back to a source-backed deterministic builder, so the demo needs zero AWS. **AWS mode:** retrieval goes to a Bedrock Knowledge Base (`backend/app/retrieval.py`, `bedrock-agent-runtime.retrieve`, gated on `BEDROCK_KB_ID`); the KB does its own embedding with Titan Text Embeddings V2 (configured in the CDK stack, not in app code); generation goes through the Strands SDK (`backend/app/agents/factory.py::StrandsLLM`), which wraps Bedrock; Bedrock Guardrails attach to that generation when `BEDROCK_GUARDRAIL_ID` is set. Note: `llm.py` is the *local* seam, **not** a Bedrock client — no boto3 Bedrock call lives there. (Gemini remains the designated fallback if Bedrock access falls through.)
 - Other: pypdf for PDF extraction
 
 ## Project Structure
@@ -82,8 +82,76 @@ Planned (not yet installed — needs Tim's approval): fastapi, uvicorn, boto3, p
 - Chat logs the recurring question **before** `shape_response_for_role`, so aggregates are role-independent.
 - Stale doc warning: `Yaza_DynamoDB_Work_Summary.md` §3/§4/§7/§10/§11 describe the pre-merge design. Its top integration note is current; the body is kept as his build record.
 
+## AWS-Readiness Conformance Pass (2026-07-15, late)
+Audited the app against the Notion PRD + implementation2.md for "ready to connect to AWS".
+The baseline was already green (107 tests, tsc clean, vite build), so these were conformance
+and wiring gaps, not build breaks. Verifier is now **113 backend tests** (107 baseline, +2 drafting
+regression, +3 guardrail gating, +1 registry source-type).
+- **Bedrock Guardrails implemented — they did not exist at all** (`grep -ri guardrail` returned
+  zero hits repo-wide despite Notion §9 specifying them in full). `infra/stacks/policy_intelligence_stack.py::_build_guardrail()`
+  creates a `CfnGuardrail` + `CfnGuardrailVersion`: content filters (hate HIGH/MEDIUM, insults
+  MEDIUM/LOW, sexual HIGH/LOW, violence HIGH/MEDIUM, misconduct MEDIUM/LOW, prompt-attack
+  HIGH/NONE), all 8 denied topics, contextual grounding at 0.80, PII `ANONYMIZE`, and the PRD's
+  verbatim blocked message. Gated by `BEDROCK_GUARDRAIL_ID` / `BEDROCK_GUARDRAIL_VERSION`
+  (`Settings.guardrails_aws`); `StrandsLLM` builds a `BedrockModel` with the guardrail when set
+  and is byte-for-byte unchanged when unset. **Output filters are deliberately looser than input**
+  — a blanket HIGH would block the harassment/weapons/misconduct policies the assistant exists
+  to explain. Do not "harden" them without re-reading Notion §9.
+  - `PROMPT_ATTACK` output strength must stay `NONE`; the Bedrock API rejects any other value.
+- **Fixed: AI-assisted drafting could never reach Bedrock.** `drafting.py::llm_revision` imported
+  the module-level `llm.generate` (which always raises by design) instead of using the pipeline's
+  selected LLM, so `revise_draft`'s `except Exception` silently fell back to deterministic text even
+  with Strands + KB fully configured. It now takes an `LLM` param and `revise_draft` passes
+  `pipeline.llm`. Regression tests in `test_drafting.py` fail against the old code — keep them.
+- **CORS is now configurable** via `FRONTEND_ORIGINS` (`config.py::allowed_origins()`); it was
+  hardcoded to four localhost origins, which broke any second worktree on a non-default Vite port.
+  Defaults unchanged. Deployed CORS is unaffected — API Gateway + the Lambda Function URL handle
+  it from `cdk deploy -c frontendOrigin=...`, so this seam is local-dev only.
+- **Corrected a false Stack claim.** CLAUDE.md said "all Bedrock calls isolated in `llm.py` — Titan
+  V2 + Claude Converse API". Untrue: `llm.py` is the *local* seam (hash embeddings; `generate()`
+  raises) and holds no boto3 Bedrock client. Real Bedrock calls live in `retrieval.py` (KB
+  `retrieve`) and via Strands in `agents/factory.py`; Titan V2 embedding is the KB's, configured in CDK.
+- **Fixed: the in-app role switcher desynced identity from role.** `require_reviewer` resolves the
+  demo role from `X-User-Email` **in preference to** `X-Role` (an if/elif chain in `auth.py`), but
+  `RoleSwitcher.changeRole` only called `setRole()` and left `policy-intelligence.user-email` at
+  whatever login stored. So logging in as Employee and clicking the prominent "Policy Maker view"
+  button gave a reviewer *view* with an employee *identity* → every reviewer-only endpoint 403'd
+  (`/api/permissions`, `/api/conflicts`), and Sources showed "No grants yet". `api.ts` now exports
+  `setDemoIdentity(role)` / `demoEmailForRole(role)`, used by both `login()` and the switcher, so the
+  two can't drift. Verified in-browser: employee → Policy Maker view now yields zero console errors
+  and a populated permissions table. **If you change one, change both** — or keep using the helper.
+- **Fixed: local registry seeding typed every corpus source as `uploads`.** `register_document`
+  whitelists `source_type` to {handbook, cba, policystat, catalog, uploads}, but corpus front matter
+  carries prose ("handbook excerpt") and PDFs carry none, so all 16 seeds silently degraded to
+  `uploads` (Handbook shown as "UPLOADS", per-source-type permissions undemoable). `registry.py`
+  now has `_SEED_TYPE_BY_STEM` mirroring the AWS authority in `infra/scripts/prepare_corpus.py`
+  (`CORPUS_SOURCES`), applied by `seed_registry_from_corpus`. Verified live: counts became
+  3 handbook / 3 cba / 3 policystat / 7 uploads. **Two-place taxonomy — keep registry.py and
+  prepare_corpus.py in step.** (Tim chose this over editing corpus front matter, which wouldn't help PDFs.)
+- **Verified in-browser (local, zero AWS)**: both roles across /login, /chats, /chats/:id, /library,
+  /topics, /catalog, /sources, /conflicts, /reviews, /review, /drafts — zero console errors after the
+  fix. Role-gated conflicts confirmed at the API: reviewer gets `sources` + `conflict_id`; employee
+  gets the softened escalation with both stripped. PRD calibration case #2 (new AI policy) passes —
+  it flags existing coverage and recommends amending, with the full 6-agent trace rendered.
+- **PRD divergence, deliberate — do not "fix"**: Notion §7's headline calibration case expects
+  *service credit toward the tenure clock* to be a CBA-vs-Handbook **conflict**. The app answers that
+  the two sources **align** (both cap at two years), because they genuinely do in the supplied text.
+  `data/corpus/synthetic-handbook-service-credit.md` says so explicitly: "It is intentionally not
+  labeled a conflict." Manufacturing that conflict would violate the demo-honesty constraint. The
+  WPAF case (Handbook Appendix G vs RES 252644) is the one that demos a real conflict.
+- **Known deliberate gaps** (Notion §9 anti-hallucination list): self-consistency (run detection
+  2–3× and only surface conflicts that reproduce) and negative controls are NOT implemented.
+  Self-consistency would triple Bedrock latency against API Gateway's ~29s cap — hence
+  `VITE_AGENT_BASE_URL`. Implemented already: programmatic span verification (`agents/verification.py`,
+  the PRD's "single biggest lever"), blind parallel extractors, structured outputs, abstention.
+
 ## Last Updated
-2026-07-15 (evening) — Merged Yaza's DynamoDB app-memory branch into prod (feedback + recurring questions added; prod key schemas kept; single DDB_* config system; four AWS-only bugs fixed; stale README deploy instructions rewritten). Recorded post-pitch AWS-first deployment posture. See the DynamoDB App-Memory Merge section.
+2026-07-15 (late) — AWS-readiness conformance pass: Bedrock Guardrails built from scratch, role-switcher
+ identity desync + registry source-type fixes,
+drafting→Bedrock defect fixed, CORS made configurable, false llm.py/Bedrock Stack claim corrected.
+See the AWS-Readiness Conformance Pass section.
+
+Previous: 2026-07-15 (evening) — Merged Yaza's DynamoDB app-memory branch into prod (feedback + recurring questions added; prod key schemas kept; single DDB_* config system; four AWS-only bugs fixed; stale README deploy instructions rewritten). Recorded post-pitch AWS-first deployment posture. See the DynamoDB App-Memory Merge section.
 
 Previous: 2026-07-15 — PRD round-2 implementation documented, including source lifecycle and permissions UI, shared resource catalog, drafting assistant, live current/archive catalog smoke results, dark-mode/navigation, and AWS infrastructure.
 

@@ -35,3 +35,9 @@
 2026-07-15T15:56:00-07:00 implementation3 T9 hit — reviewer Draft Assistant, adopt/re-check loop, shared resource catalog, reviewer/employee visibility, and canonical links verified in browser; commit 0c02e1b
 2026-07-15T15:56:00-07:00 implementation3 catalog live smoke hit — current 2026 catalog scraped 15 pages/89 chunks; archived 2024–2025 catalog scraped 15 pages/83 chunks; isolated registries confirmed active current/non-current metadata
 2026-07-15T16:18:31-07:00 implementation3 consolidated review hit — fixed AWS catalog packaging/metadata and registry seeding, Bedrock filename lifecycle matching, local reviewer authorization, Cognito chat CORS, and concurrent DynamoDB draft versioning; 87 backend tests, strict tsc/build, 3 infra tests, py_compile, Lambda handler import, and diff check passed; commit 25bc582
+2026-07-16T06:45:00-07:00 conformance-G1 codex hit — drafting llm_revision routed through pipeline.llm (was module generate, always raised -> silent deterministic fallback); 109 pytest
+2026-07-16T06:45:00-07:00 conformance-G2 codex hit (1 rerun for tests/env) — Bedrock Guardrails: CfnGuardrail+Version per Notion §9, BEDROCK_GUARDRAIL_ID gating, StrandsLLM BedrockModel; 112 pytest
+2026-07-16T06:45:00-07:00 conformance-G3 inline hit — FRONTEND_ORIGINS CORS knob (was hardcoded localhost:5173/5174); verified live: access-control-allow-origin: http://localhost:5175
+2026-07-16T06:45:00-07:00 conformance-G4 inline hit — role switcher desync fixed (setDemoIdentity); employee->Policy Maker view now 0 console errors, permissions table populates
+2026-07-16T06:45:00-07:00 conformance-verify hit — 112 pytest / tsc clean / vite build; both roles clicked through all routes; PRD calibration #2 passes; service-credit "align" confirmed deliberate
+2026-07-16T06:50:00-07:00 conformance-G5 inline hit — registry source_type: _SEED_TYPE_BY_STEM mirrors prepare_corpus taxonomy (was all "uploads"); live 3 handbook/3 cba/3 policystat/7 uploads; 113 pytest
