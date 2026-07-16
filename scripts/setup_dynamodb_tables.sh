@@ -54,12 +54,24 @@ wait_for_active() {
   return 1
 }
 
-# Render a table's key schema as "attr:KEYTYPE,attr:KEYTYPE" for comparison.
+# Render a table's key schema as "attr:HASH" or "attr:HASH,attr:RANGE".
+# Each key is queried by KeyType rather than by position: DescribeTable is not
+# documented to return KeySchema in HASH-then-RANGE order, so relying on the
+# array order would make this check quietly order-dependent.
 actual_key_schema() {
-  "${aws_cli[@]}" dynamodb describe-table \
-    --table-name "$1" \
-    --query 'Table.KeySchema[].join(`:`, [AttributeName, KeyType])' \
-    --output text | tr '\t' ','
+  local table_name="$1"
+  local hash_key range_key
+
+  hash_key="$("${aws_cli[@]}" dynamodb describe-table --table-name "$table_name" \
+    --query "Table.KeySchema[?KeyType=='HASH'].AttributeName | [0]" --output text)"
+  range_key="$("${aws_cli[@]}" dynamodb describe-table --table-name "$table_name" \
+    --query "Table.KeySchema[?KeyType=='RANGE'].AttributeName | [0]" --output text)"
+
+  if [[ -z "$range_key" || "$range_key" == "None" ]]; then
+    echo "${hash_key}:HASH"
+  else
+    echo "${hash_key}:HASH,${range_key}:RANGE"
+  fi
 }
 
 # ensure_table <name> <expected-key-schema> [create-args...]

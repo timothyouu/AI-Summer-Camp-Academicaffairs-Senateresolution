@@ -8,6 +8,7 @@ from urllib.error import URLError
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from .auth import decode_and_verify_token, require_reviewer
+from .dynamodb_client import get_dynamodb_client
 from .config import get_settings
 from .database import connection, initialize_database
 from .models import PermissionRecord, PermissionUpdate, SourceType
@@ -74,8 +75,7 @@ class DynamoDBPermissionStore:
         if not settings.ddb_permissions_table:
             raise ValueError("DDB_PERMISSIONS_TABLE is required")
         if client is None:
-            import boto3  # type: ignore[import-not-found]
-            client = boto3.client("dynamodb", region_name=settings.aws_region)
+            client = get_dynamodb_client(settings)
         self.client = client
         self.table = settings.ddb_permissions_table
 

@@ -7,6 +7,7 @@ from typing import Protocol
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from .auth import require_reviewer
+from .dynamodb_client import get_dynamodb_client
 from .config import CORPUS_DIR, UPLOAD_DIR, get_settings
 from .database import connection, initialize_database
 from .ingest import _parse_front_matter, discover_corpus_files
@@ -80,8 +81,7 @@ class DynamoDBRegistryStore:
         if not settings.ddb_registry_table:
             raise ValueError("DDB_REGISTRY_TABLE is required")
         if client is None:
-            import boto3  # type: ignore[import-not-found]
-            client = boto3.client("dynamodb", region_name=settings.aws_region)
+            client = get_dynamodb_client(settings)
         self.client = client
         self.table = settings.ddb_registry_table
 

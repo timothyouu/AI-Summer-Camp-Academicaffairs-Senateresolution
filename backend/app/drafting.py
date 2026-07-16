@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 
 from .agents import create_pipeline, resolution_output
 from .auth import require_reviewer
+from .dynamodb_client import get_dynamodb_client
 from .config import get_settings
 from .database import connection, initialize_database
 from .models import DraftReviseRequest, DraftReviseResponse, DraftVersion, ResolutionFinding
@@ -68,9 +69,7 @@ class DynamoDBDraftStore:
         if not settings.ddb_drafts_table:
             raise ValueError("DDB_DRAFTS_TABLE is required")
         if client is None:
-            import boto3  # type: ignore[import-not-found]
-
-            client = boto3.client("dynamodb", region_name=settings.aws_region)
+            client = get_dynamodb_client(settings)
         self.client = client
         self.table = settings.ddb_drafts_table
 

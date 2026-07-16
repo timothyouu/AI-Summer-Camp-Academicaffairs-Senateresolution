@@ -115,6 +115,82 @@ def test_feedback_api_persists_in_sqlite_and_chat_returns_answer_id(client: Test
     assert any(item["feedback_id"] == payload["feedback_id"] for item in listing.json())
 
 
+class PaginatedScanTable:
+    """A table whose Scan returns one item per page, like a real paged Scan.
+
+    Real DynamoDB applies Limit to the items it *evaluates*, before
+    FilterExpression runs, and signals more data with LastEvaluatedKey. A store
+    that passes Limit and ignores LastEvaluatedKey therefore silently drops
+    matches that sit beyond the first page.
+    """
+
+    def __init__(self, items: list[dict[str, object]]) -> None:
+        self.all_items = items
+        self.scan_calls = 0
+
+    def scan(self, **kwargs: object) -> dict[str, object]:
+        self.scan_calls += 1
+        assert "Limit" not in kwargs, "Limit on a filtered Scan truncates before filtering"
+        start = int(kwargs.get("ExclusiveStartKey", {}).get("n", 0)) if kwargs.get("ExclusiveStartKey") else 0  # type: ignore[union-attr]
+        page = self.all_items[start:start + 1]
+        values = kwargs.get("ExpressionAttributeValues", {})
+        assert isinstance(values, dict)
+        matching = [i for i in page if ":rating" not in values or i["rating"] == values[":rating"]]
+        response: dict[str, object] = {"Items": deepcopy(matching)}
+        if start + 1 < len(self.all_items):
+            response["LastEvaluatedKey"] = {"n": start + 1}
+        return response
+
+
+class PaginatedScanResource:
+    def __init__(self, table: PaginatedScanTable) -> None:
+        self.table = table
+
+    def Table(self, _table_name: str) -> PaginatedScanTable:
+        return self.table
+
+
+def test_list_feedback_follows_pagination_and_does_not_truncate_before_filtering() -> None:
+    # Only the last item matches, and it sits past several pages — the exact
+    # shape that a Limit-ed, unpaginated Scan silently misses.
+    items: list[dict[str, object]] = [
+        {
+            "feedback_id": f"id-{n}", "answer_id": "a", "question": "q",
+            "rating": "helpful" if n < 4 else "not_helpful", "comment": "", "issue_type": "",
+            "role": "employee", "citations_used": [], "provider": "local-index",
+            "created_at": f"2026-07-15T00:0{n}:00+00:00",
+        }
+        for n in range(5)
+    ]
+    table = PaginatedScanTable(items)
+    store = DynamoDBFeedbackStore(resource=PaginatedScanResource(table), table_name="feedback-test")
+
+    found = store.list_feedback(rating="not_helpful")
+
+    assert [record.feedback_id for record in found] == ["id-4"]
+    assert table.scan_calls == 5, "every page must be visited"
+
+
+def test_list_feedback_limit_applies_after_sorting() -> None:
+    items: list[dict[str, object]] = [
+        {
+            "feedback_id": f"id-{n}", "answer_id": "a", "question": "q",
+            "rating": "helpful", "comment": "", "issue_type": "",
+            "role": "employee", "citations_used": [], "provider": "local-index",
+            "created_at": f"2026-07-15T00:0{n}:00+00:00",
+        }
+        for n in range(5)
+    ]
+    store = DynamoDBFeedbackStore(
+        resource=PaginatedScanResource(PaginatedScanTable(items)), table_name="feedback-test"
+    )
+
+    found = store.list_feedback(limit=2)
+
+    # Newest first, across every page — not whichever two happened to be read.
+    assert [record.feedback_id for record in found] == ["id-4", "id-3"]
+
+
 def test_feedback_api_rejects_invalid_rating(client: TestClient) -> None:
     response = client.post(
         "/api/feedback",

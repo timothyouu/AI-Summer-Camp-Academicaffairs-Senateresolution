@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from .config import get_settings
 from .database import connection
-from .dynamodb_client import get_dynamodb_resource
+from .dynamodb_client import get_dynamodb_client, get_dynamodb_resource
 from .models import (
     ConflictCreate,
     ConflictRecord,
@@ -109,9 +109,7 @@ class DynamoDBConflictStore:
         if not settings.ddb_conflicts_table:
             raise ValueError("DDB_CONFLICTS_TABLE is required")
         if client is None:
-            import boto3  # type: ignore[import-not-found]
-
-            client = boto3.client("dynamodb", region_name=settings.aws_region)
+            client = get_dynamodb_client(settings)
         self.client = client
         self.table = settings.ddb_conflicts_table
 
@@ -259,9 +257,7 @@ class DynamoDBUploadStore:
         if not settings.ddb_uploads_table:
             raise ValueError("DDB_UPLOADS_TABLE is required")
         if client is None:
-            import boto3  # type: ignore[import-not-found]
-
-            client = boto3.client("dynamodb", region_name=settings.aws_region)
+            client = get_dynamodb_client(settings)
         self.client = client
         self.table = settings.ddb_uploads_table
 
@@ -301,6 +297,29 @@ class DynamoDBUploadStore:
             ingestion_job_id=str(values["ingestion_job_id"]) if values.get("ingestion_job_id") else None,
             error=str(values["error"]) if values.get("error") else None,
         )
+
+
+def _scan_all(table: Any, kwargs: dict[str, object]) -> list[dict[str, Any]]:
+    """Scan a resource-API table to exhaustion, following LastEvaluatedKey.
+
+    Deliberately does not pass Limit: DynamoDB applies Limit to the items it
+    *evaluates*, before FilterExpression runs, so a filtered scan can return an
+    empty page while matches remain further in the table. Callers here also sort
+    the full result set before truncating, which needs every match rather than
+    one arbitrary page. Scan is acceptable at demo scale; the GSIs exist for when
+    it isn't.
+    """
+    items: list[dict[str, Any]] = []
+    start_key: dict[str, Any] | None = None
+    while True:
+        page_kwargs = dict(kwargs)
+        if start_key is not None:
+            page_kwargs["ExclusiveStartKey"] = start_key
+        response = table.scan(**page_kwargs)
+        items.extend(response.get("Items", []))
+        start_key = response.get("LastEvaluatedKey")
+        if not start_key:
+            return items
 
 
 class FeedbackStore(Protocol):
@@ -391,13 +410,13 @@ class DynamoDBFeedbackStore:
         if issue_type:
             filters.append("issue_type = :issue_type")
             values[":issue_type"] = issue_type
-        kwargs: dict[str, object] = {"Limit": limit}
+        kwargs: dict[str, object] = {}
         if filters:
             kwargs["FilterExpression"] = " AND ".join(filters)
             kwargs["ExpressionAttributeValues"] = values
         if names:
             kwargs["ExpressionAttributeNames"] = names
-        items = self.table.scan(**kwargs).get("Items", [])
+        items = _scan_all(self.table, kwargs)
         return sorted((_feedback(item) for item in items), key=lambda item: item.created_at, reverse=True)[:limit]
 
 
@@ -536,10 +555,10 @@ class DynamoDBRecurringQuestionStore:
         if topic:
             filters.append("topic = :topic")
             values[":topic"] = topic
-        items = self.table.scan(
-            FilterExpression=" AND ".join(filters),
-            ExpressionAttributeValues=values,
-        ).get("Items", [])
+        items = _scan_all(self.table, {
+            "FilterExpression": " AND ".join(filters),
+            "ExpressionAttributeValues": values,
+        })
         return sorted((_recurring(item) for item in items), key=lambda item: (item.ask_count, item.last_asked_at), reverse=True)[:limit]
 
 

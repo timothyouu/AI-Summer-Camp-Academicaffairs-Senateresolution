@@ -30,89 +30,62 @@ API documentation is available at `http://localhost:8000/docs`; health is at `ht
 
 ## DynamoDB setup
 
-The main AWS stack owns its conflict and upload tables. Five additional
-application-memory tables contributed by Yaza are retained outside the stack so
-the existing data is not replaced: feedback, recurring questions, access
-control, source registry, and draft versions. The CDK stack imports those table
-names, grants the API Lambda access, and injects their `DDB_*` settings.
+Every AWS integration is gated on its own environment variable: name a table and
+that one store moves to DynamoDB, leave it unset and it stays on SQLite. There is
+no global backend switch — an earlier `APP_ENV` / `APP_PERSISTENCE_BACKEND` pair
+was removed when the app-memory branch merged, and setting them now does nothing.
 
-Local development can continue to use SQLite with
-`APP_PERSISTENCE_BACKEND=sqlite`. Production/final deployments must set
-`APP_ENV=production` and `APP_PERSISTENCE_BACKEND=dynamodb`; the backend rejects
-any production configuration that selects SQLite.
-
-Use these settings for DynamoDB mode:
+The CDK stack (`infra/`) creates all seven tables and injects these variables into
+the API Lambda, so a full `cdk deploy` needs none of the steps below. Use the
+scripts when you want DynamoDB **on its own** — deploying the whole stack also
+stands up OpenSearch Serverless and a Bedrock Knowledge Base, which is slow and
+costly just to exercise persistence.
 
 ```bash
 export AWS_PROFILE=csub-policy
 export AWS_REGION=us-west-2
-export APP_ENV=production
-export APP_PERSISTENCE_BACKEND=dynamodb
-export DYNAMODB_CONFLICTS_TABLE=policy-intelligence-conflicts
-export DYNAMODB_FEEDBACK_TABLE=policy-intelligence-feedback
-export DYNAMODB_RECURRING_QUESTIONS_TABLE=policy-intelligence-recurring-questions
-export DYNAMODB_ACCESS_CONTROL_TABLE=policy-intelligence-access-control
-export DYNAMODB_SOURCE_REGISTRY_TABLE=policy-intelligence-source-registry
-export DYNAMODB_DRAFT_VERSIONS_TABLE=policy-intelligence-draft-versions
+
+export DDB_CONFLICTS_TABLE=policy-intelligence-conflicts
+export DDB_UPLOADS_TABLE=policy-intelligence-uploads
+export DDB_REGISTRY_TABLE=policy-intelligence-source-registry
+export DDB_PERMISSIONS_TABLE=policy-intelligence-access-control
+export DDB_DRAFTS_TABLE=policy-intelligence-draft-versions
+export DDB_FEEDBACK_TABLE=policy-intelligence-feedback
+export DDB_RECURRING_QUESTIONS_TABLE=policy-intelligence-recurring-questions
 
 ./scripts/setup_dynamodb_tables.sh
 ./scripts/verify_dynamodb_tables.sh
 ```
 
-The setup script is idempotent: it creates only missing tables, including the
-required GSIs for new tables, waits for them to become active, and never deletes
-tables. The verification script checks every table and required GSI, performs a
-conditional healthcheck write, and deletes only the item it just created.
+The `DYNAMODB_*` names from `Yaza_DynamoDB_Work_Summary.md` §7 are accepted as
+aliases for five of the above, so that runbook still works —
+`DYNAMODB_SOURCE_REGISTRY_TABLE` sets the registry table,
+`DYNAMODB_ACCESS_CONTROL_TABLE` the permissions table, and
+`DYNAMODB_DRAFT_VERSIONS_TABLE` the drafts table. Where both spellings are set,
+`DDB_*` wins. See `backend/.env.example` for the full list.
 
-For manual setup, create the conflict table outside the app. Use the setup
-script above for the complete six-table configuration:
+`setup_dynamodb_tables.sh` creates only missing tables, waits for ACTIVE, and
+never deletes anything. It also checks each existing table's key schema and
+**refuses** to proceed if one does not match what the backend reads, printing the
+scan and delete commands rather than leaving a table the app cannot use. Tables
+provisioned during the earlier app-memory round trip this check by design: their
+keys (`conflict_id`, `source_id`, `user_id`+`source_key`, `draft_id`+`version_id`)
+predate the merge. `verify_dynamodb_tables.sh` checks every table and GSI and
+performs a conditional healthcheck write, deleting only the item it just created.
 
-```bash
-aws dynamodb create-table \
-  --table-name policy-intelligence-conflicts \
-  --attribute-definitions AttributeName=conflict_id,AttributeType=S \
-  --key-schema AttributeName=conflict_id,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST \
-  --region us-west-2
-```
+Do not hand-create these tables — the key schemas must match the stores exactly
+(`id` for conflicts/uploads/registry, `user_email`+`source_type` for permissions,
+`draft_id`+numeric `version` for drafts, `feedback_id`, `question_id`). Use the
+setup script or CDK, both of which encode the correct schemas.
 
-The answer-feedback API uses `DYNAMODB_FEEDBACK_TABLE` when DynamoDB is selected.
-Create that table outside the app as well:
+Credentials come from boto3's standard provider chain (AWS CLI profile, SSO, or
+an IAM role on Lambda) and must never be committed. Omit `AWS_PROFILE` in
+deployed environments so the execution role is used. `DYNAMODB_ENDPOINT_URL`
+points every store at a local DynamoDB for offline testing.
 
-```bash
-aws dynamodb create-table \
-  --table-name policy-intelligence-feedback \
-  --attribute-definitions AttributeName=feedback_id,AttributeType=S \
-  --key-schema AttributeName=feedback_id,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST \
-  --region us-west-2
-```
-
-Recurring-question tracking uses `DYNAMODB_RECURRING_QUESTIONS_TABLE` when
-DynamoDB is selected. Create that table outside the app as well:
-
-```bash
-aws dynamodb create-table \
-  --table-name policy-intelligence-recurring-questions \
-  --attribute-definitions AttributeName=question_id,AttributeType=S \
-  --key-schema AttributeName=question_id,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST \
-  --region us-west-2
-```
-
-The DynamoDB list operations use table scans because this is a small
-demo-scale deployment; add appropriate GSIs before using this access pattern
-at larger scale.
-
-Set `APP_PERSISTENCE_BACKEND=dynamodb` only after the required tables and AWS
-credentials or profile are available. The backend uses boto3's standard
-credential provider chain (AWS CLI profile, SSO, or IAM role); credentials must
-not be committed to this repo.
-
-Run the setup script before exercising application-memory routes in AWS or
-deploying a stack that expects the imported tables. Access-control,
-source-registry, and draft-version APIs remain follow-up work; this integration
-preserves their provisioned schemas for those features.
+List operations use table scans because this is a small demo-scale deployment;
+the tables carry GSIs so query-based access patterns can be adopted later without
+a rebuild.
 
 ## Demo integrity
 
