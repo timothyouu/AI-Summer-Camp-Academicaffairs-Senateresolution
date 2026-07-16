@@ -25,6 +25,8 @@ class Citation(BaseModel):
     source: str
     section: str
     excerpt: str = ""
+    canonical_url: str = ""
+    section_url: str = ""
 
 
 AgentName = Literal["orchestrator", "retrieval", "extractor", "conflict", "verifier", "escalation"]
@@ -81,14 +83,56 @@ class ResolutionResponse(BaseModel):
 class DraftReviseRequest(BaseModel):
     text: str = Field(min_length=1, max_length=50_000)
     draft_id: str | None = None
+    title: str = Field(default="Untitled draft", min_length=1, max_length=300)
+    instruction: str = Field(default="", max_length=4_000)
+    status: Literal["draft", "in_review", "archived"] = "draft"
+
+
+class DraftSaveRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=50_000)
+    draft_id: str | None = None
+    title: str = Field(default="Untitled draft", min_length=1, max_length=300)
+    status: Literal["draft", "in_review", "archived"] = "draft"
+
+
+DraftStatus = Literal["draft", "in_review", "archived"]
 
 
 class DraftVersion(BaseModel):
     draft_id: str
     version: int
+    title: str = "Untitled draft"
+    owner: str = ""
+    status: DraftStatus = "draft"
     text: str
+    source_text: str = ""
+    instruction: str = ""
     suggestion: str = ""
+    restored_from_version: int | None = None
     created_at: datetime
+
+
+class DraftSummary(BaseModel):
+    draft_id: str
+    title: str
+    owner: str = ""
+    status: DraftStatus = "draft"
+    latest_version: int
+    latest_text: str
+    updated_at: datetime
+
+
+class DraftRestoreRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=300)
+
+
+class DraftComparison(BaseModel):
+    draft_id: str
+    from_version: int
+    to_version: int
+    from_text: str
+    to_text: str
+    unified_diff: str
 
 
 class DraftReviseResponse(BaseModel):
@@ -96,6 +140,9 @@ class DraftReviseResponse(BaseModel):
     version: int
     revised_text: str
     rationale: str
+    title: str = "Untitled draft"
+    owner: str = ""
+    status: DraftStatus = "draft"
     overlaps: list[ResolutionFinding] = Field(default_factory=list)
     duplicates: list[ResolutionFinding] = Field(default_factory=list)
     conflicts: list[ResolutionFinding] = Field(default_factory=list)
@@ -241,6 +288,8 @@ class SourceUpsert(BaseModel):
     source_type: SourceType
     status: SourceLifecycleStatus = "archived"
     canonical_url: str = ""
+    owner: str = ""
+    section_index: dict[str, str] = Field(default_factory=dict)
     edition_year: int | None = None
     is_current: bool = True
     s3_key: str = ""

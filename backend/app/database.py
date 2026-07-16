@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS registry (
     source_type TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'archived',
     canonical_url TEXT NOT NULL DEFAULT '',
+    owner TEXT NOT NULL DEFAULT '',
+    section_index TEXT NOT NULL DEFAULT '{}',
     edition_year INTEGER,
     is_current INTEGER NOT NULL DEFAULT 1,
     s3_key TEXT NOT NULL DEFAULT '',
@@ -54,8 +56,14 @@ CREATE TABLE IF NOT EXISTS permissions (
 CREATE TABLE IF NOT EXISTS drafts (
     draft_id TEXT NOT NULL,
     version INTEGER NOT NULL,
+    title TEXT NOT NULL DEFAULT 'Untitled draft',
+    owner TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'draft',
     text TEXT NOT NULL,
+    source_text TEXT NOT NULL DEFAULT '',
+    instruction TEXT NOT NULL DEFAULT '',
     suggestion TEXT NOT NULL DEFAULT '',
+    restored_from_version INTEGER,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (draft_id, version)
 );
@@ -122,3 +130,26 @@ def initialize_database() -> None:
                 SELECT filename, filename, status, chunks_added, created_at FROM uploads_legacy;
                 DROP TABLE uploads_legacy;
             """)
+        registry_columns = {
+            str(row["name"])
+            for row in database.execute("PRAGMA table_info(registry)").fetchall()
+        }
+        if "owner" not in registry_columns:
+            database.execute("ALTER TABLE registry ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
+        if "section_index" not in registry_columns:
+            database.execute("ALTER TABLE registry ADD COLUMN section_index TEXT NOT NULL DEFAULT '{}'")
+        draft_columns = {
+            str(row["name"])
+            for row in database.execute("PRAGMA table_info(drafts)").fetchall()
+        }
+        draft_migrations = {
+            "title": "TEXT NOT NULL DEFAULT 'Untitled draft'",
+            "owner": "TEXT NOT NULL DEFAULT ''",
+            "status": "TEXT NOT NULL DEFAULT 'draft'",
+            "source_text": "TEXT NOT NULL DEFAULT ''",
+            "instruction": "TEXT NOT NULL DEFAULT ''",
+            "restored_from_version": "INTEGER",
+        }
+        for column, declaration in draft_migrations.items():
+            if column not in draft_columns:
+                database.execute(f"ALTER TABLE drafts ADD COLUMN {column} {declaration}")

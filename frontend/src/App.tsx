@@ -73,8 +73,10 @@ function WorkspaceRoute({ role, children }: { role: Role; children: ReactNode })
     return () => { cancelled = true; };
   }, []);
   useEffect(() => {
+    if (!cognitoModeEnabled) return;
     if (tokenRole !== undefined && tokenRole !== null && currentRole !== tokenRole) setRole(tokenRole);
   }, [currentRole, setRole, tokenRole]);
+  if (!cognitoModeEnabled && currentRole !== role) return <Navigate to="/chats" replace />;
   if (cognitoModeEnabled) {
     if (tokenRole === undefined) return null;
     if (tokenRole === null) return <Navigate to="/login" replace />;

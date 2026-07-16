@@ -97,8 +97,11 @@ OpenSearch Serverless custom-resource notes) is in `infra/README.md`.
    backend/.venv/bin/python -m backend.scripts.seed_conflicts
    ```
 
-4. Create the two demo Cognito users and add them to the `makers` / `employees`
-   groups (exact `aws cognito-idp` commands in `infra/README.md`).
+4. Create the employee, maker, and source-admin Cognito users and add them to
+   the `employees`, `makers`, and `admins` groups respectively (exact
+   `aws cognito-idp` commands in `infra/README.md`). Only `admins` can manage
+   grants; makers need a matching `can_edit` grant or source ownership to
+   archive, activate, or replace a source.
 5. Console-test retrieval: KB `retrieve` for "service credit tenure clock".
 
 ## 4. Backend env vars (the "drop the key" moment)

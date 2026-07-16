@@ -42,7 +42,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     seed_registry_from_corpus()
     if not settings.permissions_aws:
         permissions.seed_default_permissions()
-    if not settings.retrieval_aws and INDEX.size == 0:
+    # Rebuild from the complete local corpus at startup. A non-empty persisted
+    # index can still be stale (for example after a catalog scrape or source
+    # replacement), so its size alone is not a valid synchronization check.
+    if not settings.retrieval_aws:
         files = discover_corpus_files(CORPUS_DIR)
         if files:
             build_index(files)

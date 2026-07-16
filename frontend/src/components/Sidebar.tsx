@@ -16,6 +16,7 @@ const employeeItems: NavItem[] = [
   { label: "New chat", to: "/chats", icon: "plus", showActive: false },
   { label: "Search chats", to: "/library", icon: "search" },
   { label: "Topics", to: "/topics", icon: "topics" },
+  { label: "Catalog", to: "/catalog", icon: "globe" },
 ];
 
 const reviewerItems: NavItem[] = [
@@ -25,6 +26,7 @@ const reviewerItems: NavItem[] = [
   { label: "Reviews", to: "/reviews", icon: "reviews" },
   { label: "Conflicts", to: "/conflicts", icon: "warning" },
   { label: "Topics", to: "/topics", icon: "topics" },
+  { label: "Catalog", to: "/catalog", icon: "globe" },
   { label: "Sources", to: "/sources", icon: "globe" },
 ];
 

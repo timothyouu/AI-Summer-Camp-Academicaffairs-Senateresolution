@@ -87,7 +87,7 @@ export default function ReviewResults() {
         {analysis && <div className="mt-5 flex items-center gap-4 rounded-lg border border-gold/60 bg-amberbg px-4 py-3 text-sm"><span className="text-xl text-[#e9a800]">♧</span><span>{analysis.recommendation}</span></div>}
       </div>
       {submission !== null && analysis !== null && (
-        <DraftAssistant draftText={submission.text} onAdoptRevision={(revisedText) => {
+        <DraftAssistant draftTitle={submission.title} draftId={submission.draftId} draftText={submission.text} onAdoptRevision={(revisedText) => {
           const next = { ...submission, text: revisedText };
           saveReviewSubmission(next);
           setSubmission(next);

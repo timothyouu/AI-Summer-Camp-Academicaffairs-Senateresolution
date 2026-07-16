@@ -7,7 +7,7 @@ from urllib.error import URLError
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
-from .auth import decode_and_verify_token, require_reviewer
+from .auth import DEMO_ACCOUNTS, decode_and_verify_token, role_from_claims
 from .dynamodb_client import get_dynamodb_client
 from .config import get_settings
 from .database import connection, initialize_database
@@ -147,21 +147,100 @@ def identity_email(authorization: str | None, x_user_email: str | None) -> str |
     return x_user_email.lower().strip() if x_user_email else None
 
 
-def require_can_add_sources(
+def _verified_groups(authorization: str | None) -> set[str]:
+    settings = get_settings()
+    if not settings.cognito_aws or not authorization or not authorization.startswith("Bearer "):
+        return set()
+    try:
+        claims = decode_and_verify_token(authorization.removeprefix("Bearer ").strip(), settings)
+    except (ValueError, URLError, KeyError, json.JSONDecodeError):
+        return set()
+    groups = claims.get("cognito:groups", [])
+    if isinstance(groups, str):
+        groups = [groups]
+    return {str(group) for group in groups}
+
+
+def is_source_admin(authorization: str | None, x_user_email: str | None) -> bool:
+    """Admins manage grants; the seeded local reviewer is the demo administrator."""
+    if get_settings().cognito_aws:
+        return "admins" in _verified_groups(authorization)
+    email = identity_email(authorization, x_user_email)
+    return email == ADMIN_EMAIL
+
+
+def require_source_admin(
     authorization: str | None = Header(default=None),
     x_user_email: str | None = Header(default=None),
 ) -> None:
-    """Require identified uploaders to have a can-add grant for uploads."""
+    if not is_source_admin(authorization, x_user_email):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Source administrator role required")
+
+
+def _local_reviewer(x_user_email: str | None, x_role: str | None) -> bool:
+    if x_user_email:
+        account = DEMO_ACCOUNTS.get(x_user_email.lower().strip())
+        if account is not None:
+            return account[1] == "reviewer"
+    return x_role == "reviewer"
+
+
+def require_can_edit_source(
+    source_id: str,
+    authorization: str | None = Header(default=None),
+    x_user_email: str | None = Header(default=None),
+    x_role: str | None = Header(default=None),
+) -> None:
+    """Allow admins, source owners, or reviewer/writers with a can-edit grant."""
+    email = identity_email(authorization, x_user_email)
+    # Preserve header-less local command/test compatibility. AWS mode is still
+    # protected by the app-wide Cognito middleware.
+    if email is None and not get_settings().cognito_aws:
+        return
+    if is_source_admin(authorization, x_user_email):
+        return
+    groups = _verified_groups(authorization)
+    reviewer = role_from_claims({"cognito:groups": list(groups)}) == "reviewer" if get_settings().cognito_aws else _local_reviewer(x_user_email, x_role)
+    if not reviewer or email is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Reviewer/writer role required")
+
+    from .registry import registry_store
+
+    source = registry_store().get(source_id)
+    if source is None:
+        return
+    if source.owner and source.owner.lower() == email:
+        return
+    grant = permission_store().get(email, source.source_type)
+    if grant is None or not grant.can_edit:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No permission to edit this source")
+
+
+def authorize_source_write(
+    source_id: str,
+    authorization: str | None,
+    x_user_email: str | None,
+) -> None:
+    """Require can-add for a new upload and can-edit when replacing one."""
     email = identity_email(authorization, x_user_email)
     if email is None:
         return
-    record = permission_store().get(email, "uploads")
-    if record is None or not record.can_add:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No permission to add sources")
+    if is_source_admin(authorization, x_user_email):
+        return
+
+    from .registry import registry_store
+
+    existing = registry_store().get(source_id)
+    source_type: SourceType = existing.source_type if existing is not None else "uploads"
+    grant = permission_store().get(email, source_type)
+    allowed = grant is not None and (grant.can_edit if existing is not None else grant.can_add)
+    if not allowed:
+        action = "edit" if existing is not None else "add"
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"No permission to {action} this source")
 
 
 @router.get("", response_model=list[PermissionRecord])
-def list_permissions(_: None = Depends(require_reviewer)) -> list[PermissionRecord]:
+def list_permissions(_: None = Depends(require_source_admin)) -> list[PermissionRecord]:
     return permission_store().list()
 
 
@@ -170,7 +249,7 @@ def save_permission(
     payload: PermissionUpdate,
     authorization: str | None = Header(default=None),
     x_user_email: str | None = Header(default=None),
-    _: None = Depends(require_reviewer),
+    _: None = Depends(require_source_admin),
 ) -> PermissionRecord:
     granted_by = identity_email(authorization, x_user_email) or "unknown"
     return permission_store().grant(payload, granted_by=granted_by)

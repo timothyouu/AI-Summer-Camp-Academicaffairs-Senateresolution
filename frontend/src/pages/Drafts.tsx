@@ -1,74 +1,293 @@
-import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { getDraftResolution, saveReviewSubmission } from "../api";
-import type { DraftResolution, ReviewSubmission } from "../data/mock";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  compareDraftVersions,
+  getDraftResolution,
+  getDraftVersions,
+  listDrafts,
+  restoreDraftVersion,
+  reviseDraft,
+  saveDraftVersion,
+  saveReviewSubmission,
+  type DraftComparisonRecord,
+  type DraftStatus,
+  type DraftSummaryRecord,
+  type DraftVersionRecord,
+} from "../api";
+import type { ReviewSubmission } from "../data/mock";
 
-const Icon = ({ name }: { name: "list" | "link" | "comment" | "upload" | "clipboard" | "info" }) => {
-  const className = "h-5 w-5";
-  if (name === "list") return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="4" cy="18" r="1" fill="currentColor" stroke="none"/></svg>;
-  if (name === "link") return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m10 13 4-4M7.5 15.5l-1 1a3.5 3.5 0 0 1-5-5l3-3a3.5 3.5 0 0 1 5 0M16.5 8.5l1-1a3.5 3.5 0 0 1 5 5l-3 3a3.5 3.5 0 0 1-5 0"/></svg>;
-  if (name === "comment") return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 4h16v13H9l-5 4z"/></svg>;
-  if (name === "upload") return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 16V3m0 0L7 8m5-5 5 5M4 14v7h16v-7"/></svg>;
-  if (name === "clipboard") return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M8 5H5v17h14V5h-3M9 2h6v5H9z"/></svg>;
-  return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></svg>;
+const statusLabel: Record<DraftStatus, string> = {
+  draft: "Draft",
+  in_review: "In review",
+  archived: "Archived",
+};
+
+const templateText = async (): Promise<{ title: string; text: string }> => {
+  const template = await getDraftResolution();
+  return {
+    title: template.title,
+    text: template.sections.map((section) => `${section.number}. ${section.title}\n${section.body}`).join("\n\n"),
+  };
 };
 
 export default function Drafts() {
   const navigate = useNavigate();
-  const [draft, setDraft] = useState<DraftResolution | null>(null);
-  useEffect(() => { void getDraftResolution().then(setDraft); }, []);
+  const [drafts, setDrafts] = useState<DraftSummaryRecord[]>([]);
+  const [draftId, setDraftId] = useState<string | undefined>();
+  const [title, setTitle] = useState("");
+  const [text, setText] = useState("");
+  const [status, setStatus] = useState<DraftStatus>("draft");
+  const [versions, setVersions] = useState<DraftVersionRecord[]>([]);
+  const [instruction, setInstruction] = useState("");
+  const [comparison, setComparison] = useState<DraftComparisonRecord | null>(null);
+  const [compareFrom, setCompareFrom] = useState(1);
+  const [compareTo, setCompareTo] = useState(1);
+  const [working, setWorking] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
 
-  const checkDraft = () => {
-    if (draft === null) return;
-    const submission: ReviewSubmission = {
-      title: draft.title.trim() || "Untitled resolution",
-      text: draft.sections.map((section) => `${section.number}. ${section.title}\n${section.body}`).join("\n\n"),
-    };
+  const wordCount = useMemo(() => text.trim().split(/\s+/).filter(Boolean).length, [text]);
+
+  const loadVersions = async (id: string): Promise<DraftVersionRecord[]> => {
+    const loaded = await getDraftVersions(id);
+    setVersions(loaded);
+    if (loaded.length > 0) {
+      setCompareFrom(Math.max(1, loaded.length - 1));
+      setCompareTo(loaded.length);
+    }
+    return loaded;
+  };
+
+  const openDraft = async (draft: DraftSummaryRecord): Promise<void> => {
+    setDraftId(draft.draftId);
+    setTitle(draft.title);
+    setText(draft.latestText);
+    setStatus(draft.status);
+    setComparison(null);
+    setInstruction("");
+    await loadVersions(draft.draftId);
+  };
+
+  const refreshDrafts = async (selectedId?: string): Promise<void> => {
+    const loaded = await listDrafts();
+    setDrafts(loaded);
+    const selected = selectedId ? loaded.find((draft) => draft.draftId === selectedId) : undefined;
+    if (selected) {
+      setTitle(selected.title);
+      setStatus(selected.status);
+    }
+  };
+
+  useEffect(() => {
+    let active = true;
+    void listDrafts().then(async (loaded) => {
+      if (!active) return;
+      setDrafts(loaded);
+      if (loaded.length > 0) {
+        await openDraft(loaded[0]);
+      } else {
+        const template = await templateText();
+        if (active) {
+          setTitle(template.title);
+          setText(template.text);
+        }
+      }
+    }).catch((reason: unknown) => {
+      if (active) setError(reason instanceof Error ? reason.message : "Unable to load drafts.");
+    });
+    return () => { active = false; };
+  }, []);
+
+  const newDraft = (): void => {
+    setDraftId(undefined);
+    setTitle("Untitled resolution");
+    setText("");
+    setStatus("draft");
+    setVersions([]);
+    setInstruction("");
+    setComparison(null);
+    setNotice("New draft ready.");
+    setError("");
+  };
+
+  const save = async (): Promise<DraftVersionRecord | null> => {
+    if (!title.trim() || !text.trim()) {
+      setError("Add a title and draft text before saving.");
+      return null;
+    }
+    setWorking(true);
+    setError("");
+    try {
+      const saved = await saveDraftVersion({ draftId, title: title.trim(), text, status });
+      setDraftId(saved.draftId);
+      setNotice(`Saved version ${saved.version}.`);
+      await Promise.all([loadVersions(saved.draftId), refreshDrafts(saved.draftId)]);
+      return saved;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to save this draft.");
+      return null;
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const askAi = async (): Promise<void> => {
+    if (!title.trim() || !text.trim()) {
+      setError("Add a title and draft text before requesting a revision.");
+      return;
+    }
+    setWorking(true);
+    setError("");
+    try {
+      const revision = await reviseDraft(text, draftId, {
+        title: title.trim(), instruction: instruction.trim(), status,
+      });
+      setDraftId(revision.draftId);
+      setText(revision.revisedText);
+      setInstruction("");
+      setNotice(`AI revision saved as version ${revision.version}.`);
+      await Promise.all([loadVersions(revision.draftId), refreshDrafts(revision.draftId)]);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to revise this draft.");
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const restore = async (version: number): Promise<void> => {
+    if (!draftId) return;
+    setWorking(true);
+    setError("");
+    try {
+      const restored = await restoreDraftVersion(draftId, version);
+      setText(restored.text);
+      setNotice(`Version ${version} restored as version ${restored.version}.`);
+      await Promise.all([loadVersions(draftId), refreshDrafts(draftId)]);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to restore this version.");
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const compare = async (): Promise<void> => {
+    if (!draftId || compareFrom === compareTo) return;
+    setWorking(true);
+    setError("");
+    try {
+      setComparison(await compareDraftVersions(draftId, compareFrom, compareTo));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unable to compare versions.");
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const checkDraft = async (): Promise<void> => {
+    const saved = await save();
+    if (saved === null) return;
+    const submission: ReviewSubmission = { title: title.trim(), text, draftId: saved.draftId };
     saveReviewSubmission(submission);
     navigate("/review", { state: { submission } });
   };
 
   return (
-    <section className="-mt-16 text-navy-text">
-      <div className="flex h-12 items-center text-sm">
-        <Link to="/reviews" className="font-medium text-brand-blue hover:underline">Drafts</Link>
-        <span className="mx-4 text-inkmuted">/</span><span className="text-inkmuted">New review</span>
-        <span className="ml-auto mr-[310px] flex items-center gap-2 text-inkmuted"><span className="text-lg">✓</span> Saved</span>
+    <section className="mx-auto max-w-[1380px] text-navy">
+      <div className="flex items-start justify-between gap-6">
+        <div>
+          <h1 className="text-[38px] font-bold tracking-tight">Conversational policy drafting</h1>
+          <p className="mt-1 text-inkmuted">Save, resume, revise, compare, and restore conflict-aware policy drafts.</p>
+        </div>
+        <button type="button" onClick={newDraft} className="rounded-lg border border-brand-blue px-5 py-2.5 text-sm font-semibold text-brand-blue hover:bg-blue-50">New draft</button>
       </div>
 
-      <h1 className="mb-4 mt-4 text-center text-[32px] font-bold tracking-tight text-navy">Review a draft policy</h1>
-      <div className="mx-auto max-w-[1040px] rounded-xl border border-navy/20 bg-white px-5 py-4 shadow-card">
-        <input aria-label="Resolution title" disabled={draft === null} value={draft?.title ?? ""} onChange={(event) => setDraft((value) => value ? { ...value, title: event.target.value } : value)} className="h-12 w-full rounded-lg border border-navy/20 px-4 text-xl text-navy outline-none focus:border-brand-blue disabled:cursor-wait disabled:bg-slate-50" />
-        <p className="py-3 text-sm text-inkmuted">Draft resolution <span className="px-2">•</span> {draft?.wordCount ?? 612} words</p>
-        <div className="flex h-12 items-center gap-7 border-y border-navy/15 px-3 text-inkmuted">
-          <button type="button" className="text-xl font-bold" aria-label="Bold">B</button>
-          <button type="button" className="font-serif text-xl font-bold italic" aria-label="Italic">I</button>
-          <button type="button" aria-label="Numbered list"><Icon name="list" /></button>
-          <button type="button" aria-label="Insert link"><Icon name="link" /></button>
-          <button type="button" aria-label="Add comment"><Icon name="comment" /></button>
-        </div>
-        <div className="space-y-4 px-7 py-5 text-[15px] leading-6">
-          {draft?.sections.map((section) => (
-            <div key={section.number} className="grid grid-cols-[22px_1fr] gap-3">
-              <span className="font-semibold">{section.number}.</span>
-              <div><h2 className="font-bold">{section.title}.</h2><p className={section.number === 3 ? "-mx-1 bg-blue-100 px-1" : ""}>{section.body}</p></div>
+      <div className="mt-7 grid grid-cols-[280px_minmax(0,1fr)_310px] gap-6">
+        <aside className="rounded-xl border border-navy/15 bg-white p-4 shadow-card">
+          <h2 className="font-bold">Saved drafts</h2>
+          <div className="mt-3 space-y-2">
+            {drafts.map((draft) => (
+              <button key={draft.draftId} type="button" onClick={() => { void openDraft(draft); }} className={`w-full rounded-lg border px-3 py-3 text-left ${draft.draftId === draftId ? "border-brand-blue bg-blue-50" : "border-navy/10 hover:bg-cream"}`}>
+                <span className="block truncate text-sm font-semibold">{draft.title}</span>
+                <span className="mt-1 block text-xs text-inkmuted">v{draft.latestVersion} · {statusLabel[draft.status]}</span>
+              </button>
+            ))}
+            {drafts.length === 0 && <p className="py-6 text-sm text-inkmuted">No saved drafts yet.</p>}
+          </div>
+        </aside>
+
+        <main className="rounded-xl border border-navy/15 bg-white p-6 shadow-card">
+          <div className="flex gap-3">
+            <input aria-label="Draft title" value={title} onChange={(event) => setTitle(event.target.value)} className="h-11 min-w-0 flex-1 rounded-lg border border-navy/20 px-4 text-lg font-semibold outline-none focus:border-brand-blue" />
+            <select aria-label="Draft status" value={status} onChange={(event) => setStatus(event.target.value as DraftStatus)} className="rounded-lg border border-navy/20 px-3 text-sm">
+              {Object.entries(statusLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+          <p className="mt-2 text-xs text-inkmuted">{wordCount} words {draftId ? `· ${draftId}` : "· not saved yet"}</p>
+          <textarea aria-label="Draft text" value={text} onChange={(event) => setText(event.target.value)} className="mt-4 min-h-[390px] w-full resize-y rounded-lg border border-navy/20 px-4 py-4 text-sm leading-6 outline-none focus:border-brand-blue" />
+
+          <section className="mt-5 rounded-lg border border-brand-blue/20 bg-blue-50/40 p-4">
+            <h2 className="font-semibold">Ask the drafting assistant</h2>
+            <p className="mt-1 text-xs text-inkmuted">Give a specific instruction. The assistant checks the policy corpus and saves its revision as a new version.</p>
+            <textarea aria-label="Revision instruction" value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Example: Reconcile this with the CBA while preserving the original intent." className="mt-3 min-h-20 w-full rounded-lg border border-navy/20 bg-white px-3 py-2 text-sm outline-none focus:border-brand-blue" />
+            <div className="mt-3 flex flex-wrap gap-2">
+              {["Make this less restrictive.", "Reconcile this with the CBA.", "Keep the wording but add an exception."].map((prompt) => (
+                <button key={prompt} type="button" onClick={() => setInstruction(prompt)} className="rounded-full border border-brand-blue/30 bg-white px-3 py-1.5 text-xs text-brand-blue hover:bg-blue-50">{prompt}</button>
+              ))}
             </div>
-          ))}
-        </div>
-        <div className="flex items-center gap-4 text-sm font-medium text-brand-blue">
-          <button type="button" className="flex items-center gap-2"><Icon name="upload" />Upload PDF</button>
-          <span className="h-5 border-l border-navy/20" />
-          <button type="button" className="flex items-center gap-2"><Icon name="clipboard" />Replace text</button>
-        </div>
+          </section>
+
+          {error && <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</p>}
+          {notice && !error && <p aria-live="polite" className="mt-4 text-sm text-brand-blue">{notice}</p>}
+          <div className="mt-5 flex justify-end gap-3">
+            <button type="button" disabled={working} onClick={() => { void save(); }} className="rounded-lg border border-brand-blue px-5 py-2.5 text-sm font-semibold text-brand-blue disabled:opacity-50">Save version</button>
+            <button type="button" disabled={working} onClick={() => { void askAi(); }} className="rounded-lg bg-brand-blue px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{working ? "Working…" : "Revise with AI"}</button>
+            <button type="button" disabled={working} onClick={() => { void checkDraft(); }} className="rounded-lg bg-navy px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50">Check conflicts</button>
+          </div>
+        </main>
+
+        <aside className="rounded-xl border border-navy/15 bg-white p-4 shadow-card">
+          <h2 className="font-bold">Version history</h2>
+          <ol className="mt-3 max-h-[390px] space-y-2 overflow-y-auto">
+            {[...versions].reverse().map((version) => (
+              <li key={version.version} className="rounded-lg border border-navy/10 p-3">
+                <div className="flex items-center justify-between">
+                  <button type="button" onClick={() => setText(version.text)} className="text-sm font-semibold text-brand-blue hover:underline">Version {version.version}</button>
+                  <span className="text-[11px] text-inkmuted">{new Date(version.createdAt).toLocaleString()}</span>
+                </div>
+                {version.instruction && <p className="mt-2 text-xs text-inkmuted">Instruction: {version.instruction}</p>}
+                {version.restoredFromVersion !== null && <p className="mt-1 text-xs text-inkmuted">Restored from v{version.restoredFromVersion}</p>}
+                <button type="button" disabled={working} onClick={() => { void restore(version.version); }} className="mt-2 text-xs font-medium text-brand-blue hover:underline disabled:opacity-50">Restore as new version</button>
+              </li>
+            ))}
+          </ol>
+
+          {versions.length >= 2 && (
+            <section className="mt-5 border-t border-navy/10 pt-4">
+              <h3 className="text-sm font-semibold">Compare versions</h3>
+              <div className="mt-2 flex items-center gap-2">
+                <select aria-label="Compare from version" value={compareFrom} onChange={(event) => setCompareFrom(Number(event.target.value))} className="min-w-0 flex-1 rounded border border-navy/20 p-2 text-xs">
+                  {versions.map((version) => <option key={version.version} value={version.version}>v{version.version}</option>)}
+                </select>
+                <span>→</span>
+                <select aria-label="Compare to version" value={compareTo} onChange={(event) => setCompareTo(Number(event.target.value))} className="min-w-0 flex-1 rounded border border-navy/20 p-2 text-xs">
+                  {versions.map((version) => <option key={version.version} value={version.version}>v{version.version}</option>)}
+                </select>
+              </div>
+              <button type="button" disabled={working || compareFrom === compareTo} onClick={() => { void compare(); }} className="mt-2 w-full rounded border border-brand-blue px-3 py-2 text-xs font-semibold text-brand-blue disabled:opacity-40">Compare</button>
+            </section>
+          )}
+        </aside>
       </div>
 
-      <div className="-mx-10 mt-2 flex min-h-[82px] items-center border-t border-navy/15 px-10">
-        <p className="flex items-center gap-3 text-sm text-inkmuted"><Icon name="info" />Analysis compares this draft with the University Handbook, CBA, PolicyStat, and Senate resolutions.</p>
-        <div className="ml-auto flex gap-4">
-          <button type="button" className="rounded-lg border border-brand-blue px-8 py-3 text-sm font-semibold text-brand-blue hover:bg-blue-50">Save draft</button>
-          <button type="button" disabled={draft === null} onClick={checkDraft} className="rounded-lg bg-navy px-8 py-3 text-sm font-semibold text-white shadow-card hover:bg-navy-deep disabled:opacity-60">Check for overlap and conflicts</button>
-        </div>
-      </div>
+      {comparison && (
+        <section className="mt-6 rounded-xl border border-navy/15 bg-[#111827] p-5 text-slate-100 shadow-card">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold">Version {comparison.fromVersion} → {comparison.toVersion}</h2>
+            <button type="button" onClick={() => setComparison(null)} className="text-sm text-slate-300 hover:text-white">Close</button>
+          </div>
+          <pre className="mt-4 max-h-80 overflow-auto whitespace-pre-wrap text-xs leading-5">{comparison.unifiedDiff || "No textual differences."}</pre>
+        </section>
+      )}
     </section>
   );
 }

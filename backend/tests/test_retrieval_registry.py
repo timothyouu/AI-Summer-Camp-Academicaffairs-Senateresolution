@@ -36,6 +36,22 @@ def test_non_current_edition_is_down_ranked_not_dropped() -> None:
     assert kept[1].score == 0.4
 
 
+def test_registry_adds_canonical_and_section_links() -> None:
+    registry_store().upsert(SourceUpsert(
+        id="linked-doc", title="Linked Doc", source_type="handbook", status="active",
+        canonical_url="https://example.edu/handbook",
+        section_index={"Section 4": "https://example.edu/handbook#section-4"},
+    ))
+    linked = apply_registry_policy([
+        SearchResult(
+            text="text", source="Linked Doc", section="Section 4", doc_type="handbook",
+            page=None, topic="workload", score=0.9,
+        ),
+    ], k=1)[0]
+    assert linked.canonical_url == "https://example.edu/handbook"
+    assert linked.section_url == "https://example.edu/handbook#section-4"
+
+
 def test_bedrock_filename_matches_registry_s3_key() -> None:
     registry_store().upsert(SourceUpsert(
         id="catalog-2024-policy",

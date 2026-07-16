@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
-from urllib.error import URLError
 
 from fastapi import APIRouter, Depends, Header
 
 from .agents import GroundedPassage, PipelineResult, create_pipeline
 from .agents.pipeline import ESCALATION
-from .auth import decode_and_verify_token, require_authenticated, role_from_claims
-from .config import get_settings
+from .auth import request_role, require_authenticated
 from .conflicts import create_or_get_conflict
 from .models import ChatRequest, ChatResponse, Citation, ConflictCreate, ConflictSignal, Role
 from .retrieval import SearchResult, search
@@ -32,13 +29,7 @@ def resolve_request_role(authorization: str | None, x_role: str | None) -> Role:
     The local default is 'reviewer' so existing header-less calls (tests, curl,
     the pre-gating frontend) keep today's full-detail behavior.
     """
-    settings = get_settings()
-    if settings.cognito_aws and authorization and authorization.startswith("Bearer "):
-        try:
-            return role_from_claims(decode_and_verify_token(authorization.removeprefix("Bearer ").strip(), settings))
-        except (ValueError, URLError, KeyError, json.JSONDecodeError):
-            return "employee"
-    return "employee" if x_role == "employee" else "reviewer"
+    return request_role(authorization, x_role)
 
 
 def shape_response_for_role(response: ChatResponse, role: Role) -> ChatResponse:
@@ -144,7 +135,11 @@ def _citations(values: tuple[tuple[str, str, str], ...]) -> list[Citation]:
 def _local_index_answer(results: list[SearchResult]) -> ChatResponse:
     pipeline_result = create_pipeline().run(
         " ".join(result.topic for result in results[:3]) or "policy question",
-        passages=[GroundedPassage(text=result.text, span=result.text, source=result.source, section=result.section, doc_type=result.doc_type, topic=result.topic, page=result.page) for result in results],
+        passages=[GroundedPassage(
+            text=result.text, span=result.text, source=result.source, section=result.section,
+            doc_type=result.doc_type, topic=result.topic, page=result.page,
+            canonical_url=result.canonical_url, section_url=result.section_url,
+        ) for result in results],
     )
     if not results:
         return ChatResponse(
@@ -155,7 +150,10 @@ def _local_index_answer(results: list[SearchResult]) -> ChatResponse:
         )
     selected = results[:3]
     summary = " ".join(result.text[:360].strip() for result in selected)
-    citations = [Citation(id=index, source=result.source, section=result.section, excerpt=result.text[:280]) for index, result in enumerate(selected, start=1)]
+    citations = [Citation(
+        id=index, source=result.source, section=result.section, excerpt=result.text[:280],
+        canonical_url=result.canonical_url, section_url=result.section_url,
+    ) for index, result in enumerate(selected, start=1)]
     return ChatResponse(
         answer=f"The most relevant supplied policy passages state: {summary}",
         citations=citations,
@@ -166,8 +164,16 @@ def _local_index_answer(results: list[SearchResult]) -> ChatResponse:
 
 def _agent_grounded_answer(result: PipelineResult) -> ChatResponse:
     claims = result.claims[:6]
+    passage_links = {
+        (passage.source, passage.section): (passage.canonical_url, passage.section_url)
+        for passage in result.passages
+    }
     citations = [
-        Citation(id=index, source=claim.source, section=claim.section, excerpt=claim.citation_span)
+        Citation(
+            id=index, source=claim.source, section=claim.section, excerpt=claim.citation_span,
+            canonical_url=passage_links.get((claim.source, claim.section), ("", ""))[0],
+            section_url=passage_links.get((claim.source, claim.section), ("", ""))[1],
+        )
         for index, claim in enumerate(claims, start=1)
         if claim.source != "Submitted draft"
     ]
@@ -215,6 +221,27 @@ def _record_recurring_question(question: str, response: ChatResponse) -> None:
         return
 
 
+def _attach_registry_links(response: ChatResponse) -> ChatResponse:
+    """Resolve calibrated and legacy citations through the shared source registry."""
+    from .registry import registry_store
+
+    try:
+        records = registry_store().list()
+    except Exception:
+        return response
+    by_title = {record.title.casefold(): record for record in records}
+    linked: list[Citation] = []
+    for citation in response.citations:
+        record = by_title.get(citation.source.casefold())
+        if record is None:
+            linked.append(citation)
+            continue
+        canonical_url = citation.canonical_url or record.canonical_url
+        section_url = citation.section_url or record.section_index.get(citation.section, "") or canonical_url
+        linked.append(citation.model_copy(update={"canonical_url": canonical_url, "section_url": section_url}))
+    return response.model_copy(update={"citations": linked})
+
+
 @router.post("/chat", response_model=ChatResponse)
 def chat(
     payload: ChatRequest,
@@ -254,5 +281,6 @@ def chat(
             )
     # Aggregate before role-shaping so a question records the same citations no
     # matter who asked it; only the returned copy is narrowed for employees.
+    response = _attach_registry_links(response)
     _record_recurring_question(payload.question, response)
     return shape_response_for_role(response, role)

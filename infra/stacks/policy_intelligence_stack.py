@@ -401,6 +401,13 @@ class PolicyIntelligenceStack(Stack):
 
         cognito.CfnUserPoolGroup(
             self,
+            "AdminsGroup",
+            user_pool_id=user_pool.user_pool_id,
+            group_name="admins",
+            description="Source administrators — manage grants and all source lifecycle changes.",
+        )
+        cognito.CfnUserPoolGroup(
+            self,
             "MakersGroup",
             user_pool_id=user_pool.user_pool_id,
             group_name="makers",

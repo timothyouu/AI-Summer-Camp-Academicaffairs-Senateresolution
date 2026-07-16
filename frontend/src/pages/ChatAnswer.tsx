@@ -29,12 +29,16 @@ function ActionIcon({ children, label, active = false, onClick }: { children: Re
 
 function SourceCard({ citation }: { citation: Citation }) {
   const [expanded, setExpanded] = useState(false);
+  const sourceUrl = citation.sectionUrl || citation.canonicalUrl;
   return (
-    <button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)} className="min-w-0 flex-1 rounded-lg border border-navy/15 bg-[#fbfaff] px-4 py-4 text-left hover:border-brand-blue">
-      <div className="flex items-center gap-3 text-sm font-semibold text-[#243f89]"><BookIcon /><span className="truncate">{citation.title}</span></div>
-      <p className="mt-2 text-sm text-navy/75">{citation.section}</p>
-      {expanded && <p className="mt-3 border-t border-navy/10 pt-3 text-xs leading-5 text-inkmuted">Trusted policy excerpt used to ground this answer. Select again to collapse source details.</p>}
-    </button>
+    <div className="min-w-0 flex-1 rounded-lg border border-navy/15 bg-[#fbfaff] px-4 py-4 text-left hover:border-brand-blue">
+      <button type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)} className="block w-full text-left">
+        <div className="flex items-center gap-3 text-sm font-semibold text-[#243f89]"><BookIcon /><span className="truncate">{citation.title}</span></div>
+        <p className="mt-2 text-sm text-navy/75">{citation.section}</p>
+        {expanded && <p className="mt-3 border-t border-navy/10 pt-3 text-xs leading-5 text-inkmuted">Trusted policy excerpt used to ground this answer. Select again to collapse source details.</p>}
+      </button>
+      {sourceUrl && <a href={sourceUrl} target="_blank" rel="noreferrer" className="mt-3 inline-block text-xs font-medium text-brand-blue hover:underline">Open cited section ↗</a>}
+    </div>
   );
 }
 

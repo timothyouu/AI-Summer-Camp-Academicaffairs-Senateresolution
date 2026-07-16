@@ -22,6 +22,8 @@ class GroundedPassage(BaseModel):
     doc_type: str = "document"
     topic: str = ""
     page: int | None = None
+    canonical_url: str = ""
+    section_url: str = ""
 
 
 class Claim(BaseModel):

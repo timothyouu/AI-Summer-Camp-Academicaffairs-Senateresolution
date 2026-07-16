@@ -175,6 +175,8 @@ def _bedrock_metadata(page: CatalogPage, edition_year: int, is_current: bool) ->
         "topic": "campus policy",
         "edition_year": str(edition_year),
         "is_current": str(is_current).lower(),
+        "canonical_url": page.url,
+        "section_url": page.url,
     }
     payload = {
         "metadataAttributes": {
@@ -233,6 +235,7 @@ def ingest_catalog(pages: list[CatalogPage], *, edition_year: int, is_current: b
                 canonical_url=page.url,
                 edition_year=edition_year,
                 is_current=is_current,
+                section_index={page.title: page.url},
                 passages=chunks,
             )
         added += chunks
@@ -253,6 +256,7 @@ def _register_remote(slug: str, page: CatalogPage, edition_year: int, is_current
         source_type="catalog",
         status=existing.status if existing is not None else "active",
         canonical_url=page.url,
+        section_index={page.title: page.url},
         edition_year=edition_year,
         is_current=is_current,
         s3_key=f"raw/catalog/{edition_year}/{slug}.md",
