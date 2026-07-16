@@ -121,6 +121,27 @@ def test_verifier_survives_non_object_json_from_live_model() -> None:
     assert result.verified_conflicts[0].context_valid is False
 
 
+class _GarbageVerifierLLM(_ArrayVerifierLLM):
+    """Simulates a live model answering the verify step with non-JSON prose."""
+
+    def generate(self, system: str, user: str, json_mode: bool = False) -> str:
+        if "Re-read the complete supplied passages" in system:
+            return "I believe the conflict is valid, confidence high."
+        return super().generate(system, user, json_mode)
+
+
+def test_verifier_rejects_unparseable_live_response() -> None:
+    result = AgentPipeline(llm=_GarbageVerifierLLM(), store=MemoryStore()).run(
+        "service credit", passages=_passages(),
+    )
+    # A live model that cannot produce the requested JSON gives us nothing to
+    # confirm with; the conflict must be rejected, not accepted at 0.75 as the
+    # local RuntimeError seam is.
+    assert result.verified_conflicts[0].accepted is False
+    assert result.verified_conflicts[0].context_valid is False
+    assert result.verified_conflicts[0].confidence == 0.0
+
+
 def test_abstains_when_no_grounded_normative_claim_exists() -> None:
     passage = GroundedPassage(text="This section provides historical background.", span="This section provides historical background.", source="History", section="1")
     result = AgentPipeline(store=MemoryStore()).run("unanswered question", passages=[passage])
