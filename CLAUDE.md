@@ -147,7 +147,9 @@ regression, +3 guardrail gating, +1 registry source-type).
 
 ## Teammate MVP Branch Merge (2026-07-16)
 Merged PR #4 (`feature/mvp-permissions-citation-links`) into `main` (real merge commit) and hardened it.
-Verifier is now **127 backend tests** + `cd frontend && npx tsc --noEmit && npm run build`.
+Verifier is now **128 backend tests** (127 at merge, +1 regression for `build_chunks` skipping
+unreadable corpus files — added 2026-07-16 since the skip fix previously had no direct coverage)
++ `cd frontend && npx tsc --noEmit && npm run build`.
 - **What the branch adds:** enforced source archive/unarchive lifecycle (registry-backed, retrieval drops
   archived), per-user source permissions on uploads/lifecycle (`authorize_source_write` replaces the old
   blanket `require_can_add_sources`), canonical/section links on citations and catalog entries
