@@ -2,7 +2,7 @@
 implementation2.md §2 / §3 Phase A.
 
 Resource map (see infra/README.md for the full deploy story):
-  - S3 corpus bucket (handbook/, cba/, resolutions/, synthetic/ prefixes) with
+  - S3 corpus bucket (`corpus/` Bedrock root with taxonomy sub-prefixes) with
     an ObjectCreated -> ingestion Lambda notification.
   - OpenSearch Serverless VECTORSEARCH collection (encryption/network/access
     policies + a custom-resource-created vector index) backing a Bedrock
@@ -20,12 +20,14 @@ Resource map (see infra/README.md for the full deploy story):
     `from backend.app... import` and needs `backend` importable as a
     top-level package) triggered by the S3 notification above.
 
-Env var names on both Lambdas are pinned to exactly what
+Integration env var names on both Lambdas are pinned to what
 backend/app/config.py's get_settings() reads (BEDROCK_KB_ID,
+BEDROCK_MODEL_ID,
 DDB_CONFLICTS_TABLE, DDB_UPLOADS_TABLE, DDB_REGISTRY_TABLE,
 DDB_PERMISSIONS_TABLE, DDB_DRAFTS_TABLE, CORPUS_BUCKET,
-COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID) — AWS_REGION is deliberately not
-set since it's a reserved Lambda runtime env var. This worktree owns
+COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID). The API Lambda also receives
+FRONTEND_ORIGINS, which config.allowed_origins() reads directly. AWS_REGION is
+deliberately not set since it's a reserved Lambda runtime env var. This worktree owns
 `infra/` only; backend/app/lambda_entry.py,
 backend/lambda_handlers/ingestion.py, and
 backend/lambda_handlers/catalog_scraper.py are Phase B code owned
@@ -63,6 +65,8 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+from deployment_context import boolean_context
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INFRA_ROOT = Path(__file__).resolve().parents[1]
 
@@ -71,16 +75,17 @@ INFRA_ROOT = Path(__file__).resolve().parents[1]
 TITAN_EMBED_V2_DIMENSION = 1024
 CHUNK_MAX_TOKENS = 500
 CHUNK_OVERLAP_PERCENTAGE = 20
-# "uploads/" is where backend/app/uploads.py's presigned-URL flow (AWS mode)
-# writes newly uploaded files (`key = f"uploads/{filename}"`) — it must be in
-# the data source's inclusion_prefixes or the live-ingestion demo step
-# (implementation2.md §1 step 9) will upload successfully but never get
-# synced into the Knowledge Base.
-CORPUS_PREFIXES = ["handbook/", "cba/", "resolutions/", "synthetic/", "uploads/", "raw/"]
+# Bedrock accepts at most one S3 inclusion prefix. All searchable content lives
+# below this common root; drafts stay outside it and cannot enter KB ingestion.
+CORPUS_PREFIXES = ["corpus/"]
 VECTOR_INDEX_NAME = "policy-intelligence-index"
 VECTOR_FIELD_NAME = "bedrock-knowledge-base-default-vector"
 TEXT_FIELD_NAME = "AMAZON_BEDROCK_TEXT_CHUNK"
 METADATA_FIELD_NAME = "AMAZON_BEDROCK_METADATA"
+API_ALLOWED_HEADERS = ["Authorization", "Content-Type", "X-User-Email", "X-Role"]
+# The organization's SCP denies the global Claude profile. Pin generation to
+# the US regional inference profile that is available from us-west-2.
+BEDROCK_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
 
 # Ingestion Lambda's asset root is the repo root (it needs `backend` importable
 # as a top-level package — see _build_ingestion_lambda). Exclude everything
@@ -107,6 +112,7 @@ class PolicyIntelligenceStack(Stack):
         super().__init__(scope, construct_id, **kwargs)
 
         region = self.region
+        cognito_enabled = boolean_context(self.node.try_get_context("enableCognito"))
 
         corpus_bucket = self._build_corpus_bucket()
         (
@@ -114,12 +120,13 @@ class PolicyIntelligenceStack(Stack):
             drafts_table, feedback_table, recurring_questions_table,
         ) = self._build_dynamodb_tables()
         user_pool, user_pool_client, user_pool_domain = self._build_cognito()
-        collection, kb_role = self._build_opensearch_and_kb_role(corpus_bucket)
+        collection, kb_role, kb_aoss_policy = self._build_opensearch_and_kb_role(corpus_bucket)
         vector_index_resource = self._build_vector_index_custom_resource(collection, region)
         knowledge_base, data_source = self._build_knowledge_base(
             corpus_bucket=corpus_bucket,
             collection=collection,
             kb_role=kb_role,
+            kb_aoss_policy=kb_aoss_policy,
             vector_index_resource=vector_index_resource,
         )
         guardrail, guardrail_version = self._build_guardrail()
@@ -134,7 +141,7 @@ class PolicyIntelligenceStack(Stack):
         corpus_bucket.add_event_notification(
             s3.EventType.OBJECT_CREATED,
             s3_notifications.LambdaDestination(ingestion_lambda),
-            s3.NotificationKeyFilter(prefix="uploads/"),
+            s3.NotificationKeyFilter(prefix="corpus/uploads/"),
         )
 
         self._build_catalog_scraper_lambda(
@@ -157,8 +164,14 @@ class PolicyIntelligenceStack(Stack):
             guardrail_version=guardrail_version,
             user_pool=user_pool,
             user_pool_client=user_pool_client,
+            cognito_enabled=cognito_enabled,
         )
-        http_api = self._build_http_api(api_lambda=api_lambda, user_pool=user_pool, user_pool_client=user_pool_client)
+        http_api = self._build_http_api(
+            api_lambda=api_lambda,
+            user_pool=user_pool,
+            user_pool_client=user_pool_client,
+            cognito_enabled=cognito_enabled,
+        )
         agent_function_url = self._build_agent_function_url(api_lambda)
 
         self._build_outputs(
@@ -208,14 +221,14 @@ class PolicyIntelligenceStack(Stack):
             ),
             topic_policy_config=bedrock.CfnGuardrail.TopicPolicyConfigProperty(
                 topics_config=[
-                    bedrock.CfnGuardrail.TopicConfigProperty(name="Legal Advice & Interpretation", definition="Requests for legal advice, legal conclusions, or interpretation of law as applied to a person's circumstances.", type="DENY"),
+                    bedrock.CfnGuardrail.TopicConfigProperty(name="Legal Advice and Interpretation", definition="Requests for legal advice, legal conclusions, or interpretation of law as applied to a person's circumstances.", type="DENY"),
                     bedrock.CfnGuardrail.TopicConfigProperty(name="Individual Personnel Decisions", definition="Requests to make, recommend, predict, or justify an employment, discipline, evaluation, promotion, tenure, compensation, or other HR decision about an individual.", type="DENY"),
                     bedrock.CfnGuardrail.TopicConfigProperty(name="Declaring a Conflict Winner", definition="Requests to decide which person, group, office, agreement, or policy wins a specific conflict or dispute instead of identifying the applicable existing policies.", type="DENY"),
-                    bedrock.CfnGuardrail.TopicConfigProperty(name="Policy Circumvention & Evasion", definition="Requests for instructions to bypass, conceal violations of, exploit loopholes in, or otherwise evade university policies, controls, or review processes.", type="DENY"),
+                    bedrock.CfnGuardrail.TopicConfigProperty(name="Policy Circumvention and Evasion", definition="Requests for instructions to bypass, conceal violations of, exploit loopholes in, or otherwise evade university policies, controls, or review processes.", type="DENY"),
                     bedrock.CfnGuardrail.TopicConfigProperty(name="Personal Professional Advice", definition="Requests for individualized career, workplace strategy, negotiation, performance, promotion, tenure, or professional relationship advice.", type="DENY"),
-                    bedrock.CfnGuardrail.TopicConfigProperty(name="Confidential & Gated Content", definition="Requests to reveal, infer, reconstruct, or obtain confidential, privileged, restricted, personnel, student, investigation, or access-controlled information.", type="DENY"),
+                    bedrock.CfnGuardrail.TopicConfigProperty(name="Confidential and Gated Content", definition="Requests to reveal, infer, reconstruct, or obtain confidential, privileged, restricted, personnel, student, investigation, or access-controlled information.", type="DENY"),
                     bedrock.CfnGuardrail.TopicConfigProperty(name="Off-Topic General Requests", definition="Requests unrelated to locating, summarizing, comparing, or explaining university policies and their cited source materials.", type="DENY"),
-                    bedrock.CfnGuardrail.TopicConfigProperty(name="Opinions & Endorsements", definition="Requests for the assistant's personal opinion, value judgment, endorsement, approval, or recommendation of a person, organization, position, or policy outcome.", type="DENY"),
+                    bedrock.CfnGuardrail.TopicConfigProperty(name="Opinions and Endorsements", definition="Requests for the assistant's personal opinion, value judgment, endorsement, approval, or recommendation of a person, organization, position, or policy outcome.", type="DENY"),
                 ]
             ),
             contextual_grounding_policy_config=bedrock.CfnGuardrail.ContextualGroundingPolicyConfigProperty(
@@ -451,7 +464,10 @@ class PolicyIntelligenceStack(Stack):
     # ------------------------------------------------------------------
     # OpenSearch Serverless (vector store) + Bedrock KB service role
     # ------------------------------------------------------------------
-    def _build_opensearch_and_kb_role(self, corpus_bucket: s3.Bucket) -> tuple[aoss.CfnCollection, iam.Role]:
+    def _build_opensearch_and_kb_role(
+        self,
+        corpus_bucket: s3.Bucket,
+    ) -> tuple[aoss.CfnCollection, iam.Role, iam.Policy]:
         collection_name = "policy-intelligence-vectors"
 
         kb_role = iam.Role(
@@ -518,6 +534,25 @@ class PolicyIntelligenceStack(Stack):
         collection.add_dependency(encryption_policy)
         collection.add_dependency(network_policy)
 
+        # AOSS data access policies authorize principals at the collection
+        # data plane, but do not grant the principal IAM permission to call
+        # that data plane. Bedrock validates the configured vector index while
+        # creating the knowledge base, so its execution role needs both.
+        # Keep this as an explicit Policy resource so the KnowledgeBase can
+        # depend on the attachment being active before validation begins.
+        kb_aoss_policy = iam.Policy(
+            self,
+            "KnowledgeBaseAossApiPolicy",
+            statements=[
+                iam.PolicyStatement(
+                    sid="AossApiAccess",
+                    actions=["aoss:APIAccessAll"],
+                    resources=[collection.attr_arn],
+                )
+            ],
+        )
+        kb_aoss_policy.attach_to_role(kb_role)
+
         # Data access policy: who may call the AOSS data plane (create/read the
         # index). Grants the KB role and the account root (for the vector-index
         # custom resource Lambda below, whose exact role ARN is added after
@@ -526,7 +561,7 @@ class PolicyIntelligenceStack(Stack):
         self._collection = collection
         self._collection_name = collection_name
 
-        return collection, kb_role
+        return collection, kb_role, kb_aoss_policy
 
     def _build_vector_index_custom_resource(self, collection: aoss.CfnCollection, region: str) -> CustomResource:
         index_role = iam.Role(
@@ -627,6 +662,7 @@ class PolicyIntelligenceStack(Stack):
         corpus_bucket: s3.Bucket,
         collection: aoss.CfnCollection,
         kb_role: iam.Role,
+        kb_aoss_policy: iam.Policy,
         vector_index_resource: CustomResource,
     ) -> tuple[bedrock.CfnKnowledgeBase, bedrock.CfnDataSource]:
         knowledge_base = bedrock.CfnKnowledgeBase(
@@ -660,6 +696,7 @@ class PolicyIntelligenceStack(Stack):
             ),
         )
         knowledge_base.node.add_dependency(vector_index_resource)
+        knowledge_base.node.add_dependency(kb_aoss_policy)
 
         data_source = bedrock.CfnDataSource(
             self,
@@ -723,7 +760,16 @@ class PolicyIntelligenceStack(Stack):
                         "bash",
                         "-c",
                         "pip install 'pydantic>=2.8,<3' -t /asset-output"
-                        " && cp -au . /asset-output",
+                        # The repository root is mounted at /asset-input and
+                        # CDK stages bundle output under infra/cdk.out inside
+                        # that same mount. Copying `.` would recursively copy
+                        # /asset-output into itself. The handler only needs the
+                        # top-level backend package, so keep the boundary exact.
+                        " && tar -cf - --exclude='backend/.venv'"
+                        " --exclude='backend/tests'"
+                        " --exclude='backend/.pytest_cache'"
+                        " --exclude='*/__pycache__' backend"
+                        " | tar -xf - -C /asset-output",
                     ],
                 ),
             ),
@@ -747,7 +793,7 @@ class PolicyIntelligenceStack(Stack):
         corpus_bucket.grant_read(fn)
         # The handler deletes oversized uploads/ objects so they cannot ride
         # along with a later Knowledge Base sync.
-        corpus_bucket.grant_delete(fn, "uploads/*")
+        corpus_bucket.grant_delete(fn, "corpus/uploads/*")
         fn.add_to_role_policy(
             iam.PolicyStatement(
                 sid="KbIngestion",
@@ -799,10 +845,12 @@ class PolicyIntelligenceStack(Stack):
                     command=[
                         "bash",
                         "-c",
-                        "sed '/^pytest/d;/^uvicorn/d;/^httpx/d;/^strands-agents/d;/^mangum/d' requirements.txt"
+                        "sed '/^pytest/d;/^uvicorn/d;/^httpx/d;/^strands-agents/d;/^mangum/d;/^boto3/d' requirements.txt"
                         " > /tmp/requirements-scraper.txt"
                         " && pip install -r /tmp/requirements-scraper.txt -t /asset-output"
-                        " && cp -au . /asset-output",
+                        " && tar -cf - --exclude='./.venv' --exclude='./tests'"
+                        " --exclude='./.pytest_cache' --exclude='*/__pycache__' ."
+                        " | tar -xf - -C /asset-output",
                     ],
                 ),
             ),
@@ -839,6 +887,7 @@ class PolicyIntelligenceStack(Stack):
         guardrail_version: bedrock.CfnGuardrailVersion,
         user_pool: cognito.UserPool,
         user_pool_client: cognito.UserPoolClient,
+        cognito_enabled: bool,
     ) -> _lambda.Function:
         # backend/app/lambda_entry.py uses a RELATIVE import (`from .main
         # import app`), unlike ingestion.py — so its asset root is
@@ -854,6 +903,36 @@ class PolicyIntelligenceStack(Stack):
         # in requirements harmlessly (pip just installs its pinned copy).
         api_asset_path = REPO_ROOT / "backend"
 
+        environment = {
+            # Names match backend/app/config.py's get_settings() exactly.
+            # AWS_REGION is a reserved Lambda env var (set automatically
+            # by the runtime) — do not set it explicitly.
+            "BEDROCK_KB_ID": knowledge_base.attr_knowledge_base_id,
+            "BEDROCK_MODEL_ID": BEDROCK_MODEL_ID,
+            "BEDROCK_GUARDRAIL_ID": guardrail.attr_guardrail_id,
+            "BEDROCK_GUARDRAIL_VERSION": guardrail_version.attr_version,
+            "DDB_CONFLICTS_TABLE": conflicts_table.table_name,
+            "DDB_UPLOADS_TABLE": uploads_table.table_name,
+            "DDB_REGISTRY_TABLE": registry_table.table_name,
+            "DDB_PERMISSIONS_TABLE": permissions_table.table_name,
+            "DDB_DRAFTS_TABLE": drafts_table.table_name,
+            "DDB_FEEDBACK_TABLE": feedback_table.table_name,
+            "DDB_RECURRING_QUESTIONS_TABLE": recurring_questions_table.table_name,
+            "CORPUS_BUCKET": corpus_bucket.bucket_name,
+            # Mangum passes browser preflights through to FastAPI, so the
+            # application middleware must receive the same literal origins as
+            # API Gateway and the Lambda Function URL. A comma-separated value
+            # is the format consumed by backend/app/config.py.
+            "FRONTEND_ORIGINS": ",".join(self._allowed_origins()),
+        }
+        if cognito_enabled:
+            environment.update(
+                {
+                    "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
+                    "COGNITO_CLIENT_ID": user_pool_client.user_pool_client_id,
+                }
+            )
+
         fn = _lambda.Function(
             self,
             "ApiFn",
@@ -867,9 +946,11 @@ class PolicyIntelligenceStack(Stack):
                     command=[
                         "bash",
                         "-c",
-                        "sed '/^pytest/d;/^uvicorn/d;/^httpx/d' requirements.txt > /tmp/requirements-lambda.txt"
+                        "sed '/^pytest/d;/^uvicorn/d;/^httpx/d;/^boto3/d' requirements.txt > /tmp/requirements-lambda.txt"
                         " && pip install -r /tmp/requirements-lambda.txt -t /asset-output"
-                        " && cp -au . /asset-output",
+                        " && tar -cf - --exclude='./.venv' --exclude='./tests'"
+                        " --exclude='./.pytest_cache' --exclude='./lambda_handlers'"
+                        " --exclude='*/__pycache__' . | tar -xf - -C /asset-output",
                     ],
                 ),
             ),
@@ -882,30 +963,7 @@ class PolicyIntelligenceStack(Stack):
             timeout=Duration.seconds(120),
             memory_size=512,
             log_retention=logs.RetentionDays.ONE_WEEK,
-            environment={
-                # Names match backend/app/config.py's get_settings() exactly.
-                # AWS_REGION is a reserved Lambda env var (set automatically
-                # by the runtime) — do not set it explicitly.
-                "BEDROCK_KB_ID": knowledge_base.attr_knowledge_base_id,
-                "BEDROCK_GUARDRAIL_ID": guardrail.attr_guardrail_id,
-                "BEDROCK_GUARDRAIL_VERSION": guardrail_version.attr_version,
-                "DDB_CONFLICTS_TABLE": conflicts_table.table_name,
-                "DDB_UPLOADS_TABLE": uploads_table.table_name,
-                # PRD Round-2 (implementation3.md Task 11): source catalog
-                # registry/permissions + AI-drafting version history. This
-                # same ApiFn also serves the two long-running agent endpoints
-                # via the Function URL below, so there is no separate "agent
-                # Lambda" in this stack to wire these onto.
-                "DDB_REGISTRY_TABLE": registry_table.table_name,
-                "DDB_PERMISSIONS_TABLE": permissions_table.table_name,
-                "DDB_DRAFTS_TABLE": drafts_table.table_name,
-                # Application memory (Notion §9): answer feedback + recurring questions.
-                "DDB_FEEDBACK_TABLE": feedback_table.table_name,
-                "DDB_RECURRING_QUESTIONS_TABLE": recurring_questions_table.table_name,
-                "CORPUS_BUCKET": corpus_bucket.bucket_name,
-                "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
-                "COGNITO_CLIENT_ID": user_pool_client.user_pool_client_id,
-            },
+            environment=environment,
         )
         conflicts_table.grant_read_write_data(fn)
         uploads_table.grant_read_write_data(fn)
@@ -927,8 +985,7 @@ class PolicyIntelligenceStack(Stack):
                 sid="BedrockRuntimeAccess",
                 actions=[
                     "bedrock:InvokeModel",
-                    "bedrock:Converse",
-                    "bedrock:ConverseStream",
+                    "bedrock:InvokeModelWithResponseStream",
                 ],
                 resources=["*"],  # Claude/Titan foundation-model ARNs vary by version; scope down post-demo.
             )
@@ -946,11 +1003,15 @@ class PolicyIntelligenceStack(Stack):
         )
         fn.add_to_role_policy(
             iam.PolicyStatement(
-                # uploads.py's GET /api/uploads/{id} polling calls
-                # list_data_sources + get_ingestion_job on bedrock-agent.
-                # Both scope to the knowledge-base ARN.
+                # uploads.py's GET /api/uploads/{id} starts ingestion for a
+                # pending upload, then polls that job on later requests. All
+                # three actions scope to the knowledge-base ARN.
                 sid="BedrockKbIngestionStatus",
-                actions=["bedrock:ListDataSources", "bedrock:GetIngestionJob"],
+                actions=[
+                    "bedrock:ListDataSources",
+                    "bedrock:StartIngestionJob",
+                    "bedrock:GetIngestionJob",
+                ],
                 resources=[knowledge_base.attr_knowledge_base_arn],
             )
         )
@@ -969,6 +1030,7 @@ class PolicyIntelligenceStack(Stack):
         api_lambda: _lambda.Function,
         user_pool: cognito.UserPool,
         user_pool_client: cognito.UserPoolClient,
+        cognito_enabled: bool,
     ) -> apigwv2.HttpApi:
         http_api = apigwv2.HttpApi(
             self,
@@ -982,23 +1044,24 @@ class PolicyIntelligenceStack(Stack):
             cors_preflight=apigwv2.CorsPreflightOptions(
                 allow_origins=self._allowed_origins(),
                 allow_methods=[apigwv2.CorsHttpMethod.ANY],
-                allow_headers=["Authorization", "Content-Type"],
+                allow_headers=API_ALLOWED_HEADERS,
                 allow_credentials=True,
             ),
         )
 
-        authorizer = apigwv2_authorizers.HttpUserPoolAuthorizer(
-            "CognitoAuthorizer",
-            user_pool,
-            user_pool_clients=[user_pool_client],
-        )
+        authorizer = None
+        if cognito_enabled:
+            authorizer = apigwv2_authorizers.HttpUserPoolAuthorizer(
+                "CognitoAuthorizer",
+                user_pool,
+                user_pool_clients=[user_pool_client],
+            )
 
         integration = apigwv2_integrations.HttpLambdaIntegration("ApiIntegration", api_lambda)
 
-        # /api/health stays open (no auth) so uptime checks / the demo backup
-        # plan can probe the stack without a token; everything else requires
-        # a valid Cognito JWT — role comes from the token's cognito:groups
-        # claim per implementation2.md Phase B.
+        # /api/health stays open in both modes. The proxy route receives the
+        # Cognito authorizer only when enableCognito=true; otherwise the demo's
+        # hardcoded login and identity headers remain usable.
         http_api.add_routes(
             path="/api/health",
             methods=[apigwv2.HttpMethod.GET],
@@ -1027,17 +1090,17 @@ class PolicyIntelligenceStack(Stack):
         every other route keeps flowing through the gateway + JWT authorizer.
 
         auth_type is NONE because Function URLs cannot use the Cognito JWT
-        authorizer; the backend validates the Cognito token itself in-app
-        (backend/app/auth.py require_authenticated / require_reviewer), so these
-        endpoints stay authenticated in AWS mode. CORS is scoped to the same
-        origins as the HTTP API so the browser can call it cross-origin.
+        authorizer. When Cognito is enabled, the backend validates the token
+        in-app (backend/app/auth.py require_authenticated / require_reviewer).
+        The default demo mode instead uses its identity headers. CORS is scoped
+        to the same origins as the HTTP API so the browser can call it.
         """
         return api_lambda.add_function_url(
             auth_type=_lambda.FunctionUrlAuthType.NONE,
             cors=_lambda.FunctionUrlCorsOptions(
                 allowed_origins=self._allowed_origins(),
                 allowed_methods=[_lambda.HttpMethod.POST],
-                allowed_headers=["Authorization", "Content-Type"],
+                allowed_headers=API_ALLOWED_HEADERS,
                 allow_credentials=True,
                 max_age=Duration.hours(1),
             ),
