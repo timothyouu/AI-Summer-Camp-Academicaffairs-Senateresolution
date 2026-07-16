@@ -6,6 +6,8 @@ from threading import Lock
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from backend.app.agents import AgentPipeline, Claim, ConflictAnalysis, GroundedPassage, span_is_grounded
 
 
@@ -175,8 +177,13 @@ def test_strands_adapter_uses_fresh_agent_and_prompt_for_each_invocation(monkeyp
 
     created: list[dict[str, str]] = []
 
+    class FakeBedrockModel:
+        def __init__(self, **kwargs: str) -> None:
+            self.kwargs = kwargs
+
     class FakeAgent:
-        def __init__(self, *, system_prompt: str) -> None:
+        def __init__(self, *, model: object, system_prompt: str) -> None:
+            assert isinstance(model, FakeBedrockModel)
             self.system_prompt = system_prompt
             created.append({"system": system_prompt, "user": ""})
 
@@ -185,6 +192,7 @@ def test_strands_adapter_uses_fresh_agent_and_prompt_for_each_invocation(monkeyp
             return {"role": "assistant", "content": [{"text": "[]"}]}
 
     monkeypatch.setitem(sys.modules, "strands", SimpleNamespace(Agent=FakeAgent))
+    monkeypatch.setitem(sys.modules, "strands.models", SimpleNamespace(BedrockModel=FakeBedrockModel))
     llm = StrandsLLM()
 
     assert llm.generate("extract source A", "source A", json_mode=True) == "[]"
@@ -193,3 +201,155 @@ def test_strands_adapter_uses_fresh_agent_and_prompt_for_each_invocation(monkeyp
         {"system": "extract source A", "user": "source A"},
         {"system": "extract source B", "user": "source B"},
     ]
+
+
+def test_strands_adapter_normalizes_max_tokens_error(monkeypatch: Any) -> None:
+    from backend.app.agents.factory import StrandsLLM
+
+    class MaxTokensReachedException(Exception):
+        pass
+
+    class FakeBedrockModel:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+
+    class FakeAgent:
+        def __init__(self, *, model: object, system_prompt: str) -> None:
+            del model, system_prompt
+
+        def __call__(self, user: str) -> object:
+            del user
+            raise MaxTokensReachedException("output token limit reached")
+
+    exceptions = SimpleNamespace(MaxTokensReachedException=MaxTokensReachedException)
+    monkeypatch.setitem(sys.modules, "strands", SimpleNamespace(Agent=FakeAgent))
+    monkeypatch.setitem(sys.modules, "strands.models", SimpleNamespace(BedrockModel=FakeBedrockModel))
+    monkeypatch.setitem(sys.modules, "strands.types.exceptions", exceptions)
+
+    with pytest.raises(RuntimeError, match="output token limit reached") as raised:
+        StrandsLLM().generate("system", "user")
+    assert isinstance(raised.value.__cause__, MaxTokensReachedException)
+
+
+def test_strands_adapter_times_out_stalled_provider_call(monkeypatch: Any) -> None:
+    from threading import Event
+
+    from backend.app.agents.factory import StrandsLLM
+
+    release = Event()
+    calls = 0
+
+    class FakeBedrockModel:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+
+    class FakeAgent:
+        def __init__(self, *, model: object, system_prompt: str) -> None:
+            del model, system_prompt
+
+        def __call__(self, user: str) -> object:
+            nonlocal calls
+            del user
+            calls += 1
+            release.wait(timeout=1)
+            return {"role": "assistant", "content": [{"text": "[]"}]}
+
+    monkeypatch.setitem(sys.modules, "strands", SimpleNamespace(Agent=FakeAgent))
+    monkeypatch.setitem(sys.modules, "strands.models", SimpleNamespace(BedrockModel=FakeBedrockModel))
+    monkeypatch.setitem(sys.modules, "strands.types.exceptions", SimpleNamespace())
+
+    llm = StrandsLLM(generation_timeout_seconds=0.01)
+    try:
+        with pytest.raises(RuntimeError, match="exceeded 0.01 seconds"):
+            llm.generate("system", "user")
+    finally:
+        release.set()
+    with pytest.raises(RuntimeError, match="generation disabled"):
+        llm.generate("system", "second user")
+    assert calls == 1
+
+
+def test_strands_adapter_rejects_repeated_guardrail_refusal(monkeypatch: Any) -> None:
+    from backend.app.agents.factory import StrandsLLM
+
+    refusal = (
+        "I can help you find and understand existing policy, but I can't help with that. "
+        "Please contact the appropriate office."
+    )
+
+    class FakeBedrockModel:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+
+    class FakeAgent:
+        def __init__(self, *, model: object, system_prompt: str) -> None:
+            del model, system_prompt
+
+        def __call__(self, user: str) -> object:
+            del user
+            return {
+                "role": "assistant",
+                "content": [{"text": refusal}, {"text": refusal}],
+            }
+
+    monkeypatch.setitem(sys.modules, "strands", SimpleNamespace(Agent=FakeAgent))
+    monkeypatch.setitem(sys.modules, "strands.models", SimpleNamespace(BedrockModel=FakeBedrockModel))
+    monkeypatch.setitem(sys.modules, "strands.types.exceptions", SimpleNamespace())
+
+    with pytest.raises(RuntimeError, match="repeated the guardrail refusal"):
+        StrandsLLM().generate("system", "user")
+
+
+def test_strands_adapter_does_not_normalize_programmer_error(monkeypatch: Any) -> None:
+    from backend.app.agents.factory import StrandsLLM
+
+    class FakeBedrockModel:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+
+    class FakeAgent:
+        def __init__(self, *, model: object, system_prompt: str) -> None:
+            del model, system_prompt
+
+        def __call__(self, user: str) -> object:
+            del user
+            raise TypeError("adapter bug")
+
+    monkeypatch.setitem(sys.modules, "strands", SimpleNamespace(Agent=FakeAgent))
+    monkeypatch.setitem(sys.modules, "strands.models", SimpleNamespace(BedrockModel=FakeBedrockModel))
+    monkeypatch.setitem(sys.modules, "strands.types.exceptions", SimpleNamespace())
+
+    with pytest.raises(TypeError, match="adapter bug"):
+        StrandsLLM().generate("system", "user")
+
+
+def test_strands_provider_error_uses_pipeline_fallback(monkeypatch: Any) -> None:
+    from backend.app.agents.factory import StrandsLLM
+
+    class ModelThrottledException(Exception):
+        pass
+
+    class FakeBedrockModel:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+
+    class FakeAgent:
+        def __init__(self, *, model: object, system_prompt: str) -> None:
+            del model, system_prompt
+
+        def __call__(self, user: str) -> object:
+            del user
+            raise ModelThrottledException("provider throttled")
+
+    exceptions = SimpleNamespace(ModelThrottledException=ModelThrottledException)
+    monkeypatch.setitem(sys.modules, "strands", SimpleNamespace(Agent=FakeAgent))
+    monkeypatch.setitem(sys.modules, "strands.models", SimpleNamespace(BedrockModel=FakeBedrockModel))
+    monkeypatch.setitem(sys.modules, "strands.types.exceptions", exceptions)
+
+    result = AgentPipeline(llm=StrandsLLM(), store=MemoryStore()).run(
+        "service credit", passages=_passages(),
+    )
+
+    assert len(result.claims) == 2
+    assert result.analyses[0].classification == "contradiction"
+    assert result.verified_conflicts[0].accepted is True
