@@ -123,6 +123,8 @@ file without exporting it does not change modes.
 |---|---|
 | `AWS_REGION` | region for all AWS clients |
 | `BEDROCK_KB_ID` | Bedrock KB retrieval (replaces NumPy index) + Strands mode (if `strands` installed) |
+| `BEDROCK_GUARDRAIL_ID` | Bedrock Guardrails for Strands generation |
+| `BEDROCK_GUARDRAIL_VERSION` | pinned Bedrock Guardrail version used by Strands generation |
 | `DDB_CONFLICTS_TABLE` | DynamoDB conflict log (replaces SQLite) |
 | `DDB_UPLOADS_TABLE` | DynamoDB upload registry (replaces SQLite) |
 | `DDB_REGISTRY_TABLE` | DynamoDB source registry (replaces SQLite) |

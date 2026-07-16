@@ -25,10 +25,26 @@ class StrandsLLM:
     def __init__(self) -> None:
         module = importlib.import_module("strands")
         self._agent_type: Any = getattr(module, "Agent")
+        self._bedrock_model: Any | None = None
+        settings = get_settings()
+        if settings.guardrails_aws:
+            try:
+                models = importlib.import_module("strands.models")
+                model_type: Any = getattr(models, "BedrockModel")
+                self._bedrock_model = model_type(
+                    guardrail_id=settings.bedrock_guardrail_id,
+                    guardrail_version=settings.bedrock_guardrail_version,
+                )
+            except (ImportError, AttributeError, TypeError):
+                # Older Strands releases may not expose BedrockModel here.
+                self._bedrock_model = None
 
     def generate(self, system: str, user: str, json_mode: bool = False) -> str:
         del json_mode
-        agent: Any = self._agent_type(system_prompt=system)
+        if self._bedrock_model is None:
+            agent: Any = self._agent_type(system_prompt=system)
+        else:
+            agent = self._agent_type(model=self._bedrock_model, system_prompt=system)
         result = agent(user)
         return _message_text(getattr(result, "message", result))
 

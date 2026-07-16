@@ -25,6 +25,8 @@ class Settings:
     aws_profile: str | None = None
     dynamodb_endpoint_url: str | None = None
     bedrock_kb_id: str | None = None
+    bedrock_guardrail_id: str | None = None
+    bedrock_guardrail_version: str | None = None
     ddb_conflicts_table: str | None = None
     ddb_uploads_table: str | None = None
     ddb_registry_table: str | None = None
@@ -39,6 +41,10 @@ class Settings:
     @property
     def retrieval_aws(self) -> bool:
         return bool(self.bedrock_kb_id)
+
+    @property
+    def guardrails_aws(self) -> bool:
+        return bool(self.bedrock_guardrail_id)
 
     @property
     def conflicts_aws(self) -> bool:
@@ -91,6 +97,8 @@ def get_settings() -> Settings:
         aws_region=value("AWS_REGION"), aws_profile=value("AWS_PROFILE"),
         dynamodb_endpoint_url=value("DYNAMODB_ENDPOINT_URL"),
         bedrock_kb_id=value("BEDROCK_KB_ID"),
+        bedrock_guardrail_id=value("BEDROCK_GUARDRAIL_ID"),
+        bedrock_guardrail_version=value("BEDROCK_GUARDRAIL_VERSION"),
         ddb_conflicts_table=first("DDB_CONFLICTS_TABLE", "DYNAMODB_CONFLICTS_TABLE"),
         ddb_uploads_table=first("DDB_UPLOADS_TABLE", "DYNAMODB_UPLOADS_TABLE"),
         ddb_registry_table=first("DDB_REGISTRY_TABLE", "DYNAMODB_SOURCE_REGISTRY_TABLE"),

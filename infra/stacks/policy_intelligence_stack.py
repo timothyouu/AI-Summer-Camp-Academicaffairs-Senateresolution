@@ -122,6 +122,7 @@ class PolicyIntelligenceStack(Stack):
             kb_role=kb_role,
             vector_index_resource=vector_index_resource,
         )
+        guardrail, guardrail_version = self._build_guardrail()
         ingestion_lambda = self._build_ingestion_lambda(
             corpus_bucket=corpus_bucket,
             uploads_table=uploads_table,
@@ -152,6 +153,8 @@ class PolicyIntelligenceStack(Stack):
             recurring_questions_table=recurring_questions_table,
             knowledge_base=knowledge_base,
             data_source=data_source,
+            guardrail=guardrail,
+            guardrail_version=guardrail_version,
             user_pool=user_pool,
             user_pool_client=user_pool_client,
         )
@@ -170,12 +173,78 @@ class PolicyIntelligenceStack(Stack):
             recurring_questions_table=recurring_questions_table,
             knowledge_base=knowledge_base,
             data_source=data_source,
+            guardrail=guardrail,
+            guardrail_version=guardrail_version,
             user_pool=user_pool,
             user_pool_client=user_pool_client,
             user_pool_domain=user_pool_domain,
             http_api=http_api,
             agent_function_url=agent_function_url,
         )
+
+    # ------------------------------------------------------------------
+    # Bedrock Guardrails
+    # ------------------------------------------------------------------
+    def _build_guardrail(self) -> tuple[bedrock.CfnGuardrail, bedrock.CfnGuardrailVersion]:
+        blocked_message = (
+            "I can help you find and understand existing policy, but I can't help with that. "
+            "Please contact your dean, the Provost's office, or the appropriate office."
+        )
+        guardrail = bedrock.CfnGuardrail(
+            self,
+            "PolicyAssistantGuardrail",
+            name="policy-intelligence-guardrail",
+            blocked_input_messaging=blocked_message,
+            blocked_outputs_messaging=blocked_message,
+            content_policy_config=bedrock.CfnGuardrail.ContentPolicyConfigProperty(
+                filters_config=[
+                    bedrock.CfnGuardrail.ContentFilterConfigProperty(type="HATE", input_strength="HIGH", output_strength="MEDIUM"),
+                    bedrock.CfnGuardrail.ContentFilterConfigProperty(type="INSULTS", input_strength="MEDIUM", output_strength="LOW"),
+                    bedrock.CfnGuardrail.ContentFilterConfigProperty(type="SEXUAL", input_strength="HIGH", output_strength="LOW"),
+                    bedrock.CfnGuardrail.ContentFilterConfigProperty(type="VIOLENCE", input_strength="HIGH", output_strength="MEDIUM"),
+                    bedrock.CfnGuardrail.ContentFilterConfigProperty(type="MISCONDUCT", input_strength="MEDIUM", output_strength="LOW"),
+                    bedrock.CfnGuardrail.ContentFilterConfigProperty(type="PROMPT_ATTACK", input_strength="HIGH", output_strength="NONE"),
+                ]
+            ),
+            topic_policy_config=bedrock.CfnGuardrail.TopicPolicyConfigProperty(
+                topics_config=[
+                    bedrock.CfnGuardrail.TopicConfigProperty(name="Legal Advice & Interpretation", definition="Requests for legal advice, legal conclusions, or interpretation of law as applied to a person's circumstances.", type="DENY"),
+                    bedrock.CfnGuardrail.TopicConfigProperty(name="Individual Personnel Decisions", definition="Requests to make, recommend, predict, or justify an employment, discipline, evaluation, promotion, tenure, compensation, or other HR decision about an individual.", type="DENY"),
+                    bedrock.CfnGuardrail.TopicConfigProperty(name="Declaring a Conflict Winner", definition="Requests to decide which person, group, office, agreement, or policy wins a specific conflict or dispute instead of identifying the applicable existing policies.", type="DENY"),
+                    bedrock.CfnGuardrail.TopicConfigProperty(name="Policy Circumvention & Evasion", definition="Requests for instructions to bypass, conceal violations of, exploit loopholes in, or otherwise evade university policies, controls, or review processes.", type="DENY"),
+                    bedrock.CfnGuardrail.TopicConfigProperty(name="Personal Professional Advice", definition="Requests for individualized career, workplace strategy, negotiation, performance, promotion, tenure, or professional relationship advice.", type="DENY"),
+                    bedrock.CfnGuardrail.TopicConfigProperty(name="Confidential & Gated Content", definition="Requests to reveal, infer, reconstruct, or obtain confidential, privileged, restricted, personnel, student, investigation, or access-controlled information.", type="DENY"),
+                    bedrock.CfnGuardrail.TopicConfigProperty(name="Off-Topic General Requests", definition="Requests unrelated to locating, summarizing, comparing, or explaining university policies and their cited source materials.", type="DENY"),
+                    bedrock.CfnGuardrail.TopicConfigProperty(name="Opinions & Endorsements", definition="Requests for the assistant's personal opinion, value judgment, endorsement, approval, or recommendation of a person, organization, position, or policy outcome.", type="DENY"),
+                ]
+            ),
+            contextual_grounding_policy_config=bedrock.CfnGuardrail.ContextualGroundingPolicyConfigProperty(
+                # 0.80 is intentionally high for both citation grounding and query relevance.
+                filters_config=[
+                    bedrock.CfnGuardrail.ContextualGroundingFilterConfigProperty(type="GROUNDING", threshold=0.8),
+                    bedrock.CfnGuardrail.ContextualGroundingFilterConfigProperty(type="RELEVANCE", threshold=0.8),
+                ]
+            ),
+            sensitive_information_policy_config=bedrock.CfnGuardrail.SensitiveInformationPolicyConfigProperty(
+                # Built-in PII types mask personal data without matching policy/section identifiers.
+                pii_entities_config=[
+                    bedrock.CfnGuardrail.PiiEntityConfigProperty(type="NAME", action="ANONYMIZE"),
+                    bedrock.CfnGuardrail.PiiEntityConfigProperty(type="ADDRESS", action="ANONYMIZE"),
+                    bedrock.CfnGuardrail.PiiEntityConfigProperty(type="EMAIL", action="ANONYMIZE"),
+                    bedrock.CfnGuardrail.PiiEntityConfigProperty(type="PHONE", action="ANONYMIZE"),
+                    bedrock.CfnGuardrail.PiiEntityConfigProperty(type="USERNAME", action="ANONYMIZE"),
+                    bedrock.CfnGuardrail.PiiEntityConfigProperty(type="DRIVER_ID", action="ANONYMIZE"),
+                    bedrock.CfnGuardrail.PiiEntityConfigProperty(type="US_SOCIAL_SECURITY_NUMBER", action="ANONYMIZE"),
+                ]
+            ),
+        )
+        version = bedrock.CfnGuardrailVersion(
+            self,
+            "PolicyAssistantGuardrailVersion",
+            guardrail_identifier=guardrail.attr_guardrail_id,
+            description="Pinned policy assistant guardrail version",
+        )
+        return guardrail, version
 
     # ------------------------------------------------------------------
     # S3
@@ -759,6 +828,8 @@ class PolicyIntelligenceStack(Stack):
         recurring_questions_table: dynamodb.Table,
         knowledge_base: bedrock.CfnKnowledgeBase,
         data_source: bedrock.CfnDataSource,
+        guardrail: bedrock.CfnGuardrail,
+        guardrail_version: bedrock.CfnGuardrailVersion,
         user_pool: cognito.UserPool,
         user_pool_client: cognito.UserPoolClient,
     ) -> _lambda.Function:
@@ -809,6 +880,8 @@ class PolicyIntelligenceStack(Stack):
                 # AWS_REGION is a reserved Lambda env var (set automatically
                 # by the runtime) — do not set it explicitly.
                 "BEDROCK_KB_ID": knowledge_base.attr_knowledge_base_id,
+                "BEDROCK_GUARDRAIL_ID": guardrail.attr_guardrail_id,
+                "BEDROCK_GUARDRAIL_VERSION": guardrail_version.attr_version,
                 "DDB_CONFLICTS_TABLE": conflicts_table.table_name,
                 "DDB_UPLOADS_TABLE": uploads_table.table_name,
                 # PRD Round-2 (implementation3.md Task 11): source catalog
@@ -872,6 +945,13 @@ class PolicyIntelligenceStack(Stack):
                 sid="BedrockKbIngestionStatus",
                 actions=["bedrock:ListDataSources", "bedrock:GetIngestionJob"],
                 resources=[knowledge_base.attr_knowledge_base_arn],
+            )
+        )
+        fn.add_to_role_policy(
+            iam.PolicyStatement(
+                sid="BedrockGuardrailAccess",
+                actions=["bedrock:ApplyGuardrail"],
+                resources=[guardrail.attr_guardrail_arn],
             )
         )
         return fn
@@ -973,6 +1053,8 @@ class PolicyIntelligenceStack(Stack):
         recurring_questions_table: dynamodb.Table,
         knowledge_base: bedrock.CfnKnowledgeBase,
         data_source: bedrock.CfnDataSource,
+        guardrail: bedrock.CfnGuardrail,
+        guardrail_version: bedrock.CfnGuardrailVersion,
         user_pool: cognito.UserPool,
         user_pool_client: cognito.UserPoolClient,
         user_pool_domain: cognito.UserPoolDomain,
@@ -986,6 +1068,8 @@ class PolicyIntelligenceStack(Stack):
         CfnOutput(self, "CorpusBucketName", value=corpus_bucket.bucket_name)
         CfnOutput(self, "BedrockKbId", value=knowledge_base.attr_knowledge_base_id)
         CfnOutput(self, "BedrockDataSourceId", value=data_source.attr_data_source_id)
+        CfnOutput(self, "BedrockGuardrailId", value=guardrail.attr_guardrail_id)
+        CfnOutput(self, "BedrockGuardrailVersion", value=guardrail_version.attr_version)
         CfnOutput(self, "DdbConflictsTable", value=conflicts_table.table_name)
         CfnOutput(self, "DdbUploadsTable", value=uploads_table.table_name)
         CfnOutput(self, "DdbRegistryTable", value=registry_table.table_name)
