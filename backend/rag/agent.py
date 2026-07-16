@@ -1,3 +1,5 @@
+from typing import Any
+
 from strands import Agent
 from config import MODEL_ID
 from retrieval.search import (
@@ -27,7 +29,7 @@ Always:
 )
 
 
-def ask_policy_assistant(question):
+def ask_policy_assistant(question: str) -> Any:
     response = agent(question)
 
     return response

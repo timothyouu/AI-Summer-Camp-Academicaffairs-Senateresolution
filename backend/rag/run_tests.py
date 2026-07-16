@@ -1,5 +1,7 @@
 import json
+from config import ACADEMIC_KB_ID
 from models.claude_model import ask_claude
+from retrieval.search import search_policy
 
 
 # Load test questions
@@ -13,7 +15,8 @@ results = []
 for item in questions:
     print(f"Testing question {item['id']}...")
 
-    answer = ask_claude(item["question"])
+    context = search_policy(item["question"], ACADEMIC_KB_ID)
+    answer = ask_claude(item["question"], context)
 
     results.append(
         {

@@ -176,8 +176,41 @@ unreadable corpus files — added 2026-07-16 since the skip fix previously had n
   field is an S3 prefix vocabulary, not the registry taxonomy; rtp files seeding as `uploads` locally is
   the verified 3/3/3/7 split.
 
+## Feature/rag Merge (2026-07-16)
+Merged `feature/rag` (Alyssa's — GitHub `muldong-alyssa` — standalone Bedrock RAG spike) into `prod`
+as a real merge commit (`e0d65df`, preserving her commit `063a259` in history rather than
+squashing it — same pattern as the DynamoDB and MVP merges above).
+- **Purely additive.** Everything lands under the new `backend/rag/` directory: `agent.py`,
+  `config.py`, `retrieval/search.py`, test/runner scripts, plus her `documents`, `models`,
+  `results`, `tests` working folders. Nothing under `backend/app/` changed, and nothing in
+  `backend/rag/` is imported by the app — see `backend/rag/README.md` for the "how this maps to
+  the app" boundary in detail.
+- **Reconciled to the env-gated architecture rather than left as a personal script.** Post-merge
+  hardening moved `config.py` from Alyssa's hardcoded values to env-var reads with her values as
+  defaults (`AWS_REGION`, `BEDROCK_MODEL_ID`, `ACADEMIC_KB_ID`, `SENATE_KB_ID`,
+  `BEDROCK_GUARDRAIL_ID`, `BEDROCK_GUARDRAIL_VERSION`) so the spike follows the same "gated on its
+  own env var, nothing flips until it's set" pattern as the rest of the AWS integrations in this
+  repo; fixed retrieval to use `vectorSearchConfiguration`; fixed two script call sites whose
+  signatures didn't match the functions they called; and removed a `.vscode` file that had no
+  business being committed.
+- **Two-KB topology is spike-only.** Alyssa's harness splits retrieval across two Knowledge Bases
+  (academic, senate) as her own experiment design. The app's retrieval seam
+  (`backend/app/retrieval.py`) keeps its single `BEDROCK_KB_ID` — this merge does not change how
+  many KBs the app talks to, and the two-KB pattern should not be read as a direction the app is
+  heading.
+- **KB IDs recorded, not verified.** The spike carries two apparently real provisioned Knowledge
+  Base IDs (`HHFJ4IDG9M` academic, `87GR7ILJEF` senate, both `us-west-2`) and the exact Claude
+  model id `implementation-aws.md` §3 recommends. This machine still has no AWS credentials, so
+  none of that is confirmed live from this repo — it's evidence Alyssa has Bedrock access
+  somewhere, not a verified-working resource. `implementation-aws.md`'s honesty check and §4 now
+  cross-reference this.
+
 ## Last Updated
-2026-07-16 — Merged teammate PR #4 (source lifecycle, per-user permissions, citation links, persistent
+2026-07-16 — Merged Alyssa's `feature/rag` Bedrock RAG spike (`backend/rag/`) into `prod` as a real
+merge commit, reconciled its config to the env-gated pattern, and documented that it carries
+unverified-but-real-looking Knowledge Base IDs. See the Feature/rag Merge section.
+
+Previous: 2026-07-16 — Merged teammate PR #4 (source lifecycle, per-user permissions, citation links, persistent
 drafting workspace) into `main` and `prod`, resolved the `llm_revision` conflict, fixed merge seams,
 added draft owner scoping + S3 draft-copy regression test. See the Teammate MVP Branch Merge section.
 

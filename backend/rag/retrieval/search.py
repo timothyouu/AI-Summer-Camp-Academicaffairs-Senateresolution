@@ -1,33 +1,31 @@
 import boto3
-from config import ACADEMIC_KB_ID, SENATE_KB_ID
+from config import ACADEMIC_KB_ID, REGION, SENATE_KB_ID
 from strands import tool
 
 
 # Bedrock Knowledge Base client
 bedrock_agent = boto3.client(
     "bedrock-agent-runtime",
-    region_name="us-west-2"
+    region_name=REGION,
 )
 
 
-def search_policy(question, knowledge_base_id):
+def search_policy(question: str, knowledge_base_id: str) -> str:
     """
     Search a Bedrock Knowledge Base and return relevant documents.
     """
 
     response = bedrock_agent.retrieve(
-    knowledgeBaseId=knowledge_base_id,
-    retrievalQuery={
-        "text": question
-    },
-    retrievalConfiguration={
-        "managedSearchConfiguration": {
-            "numberOfResults": 5
-        }
-    }
-)
+        knowledgeBaseId=knowledge_base_id,
+        retrievalQuery={"text": question},
+        retrievalConfiguration={
+            "vectorSearchConfiguration": {
+                "numberOfResults": 5,
+            }
+        },
+    )
 
-    documents = []
+    documents: list[str] = []
 
     for result in response["retrievalResults"]:
         text = result["content"]["text"]
@@ -36,7 +34,7 @@ def search_policy(question, knowledge_base_id):
     return "\n\n".join(documents)
 
 @tool
-def search_academic_policy(question: str):
+def search_academic_policy(question: str) -> str:
     """
     Search the Academic Affairs policy knowledge base.
     Use this for questions about academic policies.
@@ -47,7 +45,7 @@ def search_academic_policy(question: str):
     )
 
 @tool
-def search_senate_policy(question: str):
+def search_senate_policy(question: str) -> str:
     """
     Search the Senate Resolution knowledge base.
     Use this for questions about senate resolutions.

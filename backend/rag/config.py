@@ -1,22 +1,12 @@
-# config.py
-# AWS Bedrock configuration for CSUB Policy Intelligence Assistant
+import os
 
 
-# Claude model running on Amazon Bedrock
-MODEL_ID = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-
-
-# Knowledge Base IDs
-# Replace these with your actual Bedrock Knowledge Base IDs
-
-ACADEMIC_KB_ID = "HHFJ4IDG9M"
-
-SENATE_KB_ID = "87GR7ILJEF"
-
-
-# Bedrock Guardrail (optional for now)
-# Replace after you connect your guardrail
-
-GUARDRAIL_ID = "YOUR_GUARDRAIL_ID"
-
-GUARDRAIL_VERSION = "1"
+REGION = os.getenv("AWS_REGION", "us-west-2")
+MODEL_ID = os.getenv(
+    "BEDROCK_MODEL_ID",
+    "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+)
+ACADEMIC_KB_ID = os.getenv("ACADEMIC_KB_ID", "HHFJ4IDG9M")
+SENATE_KB_ID = os.getenv("SENATE_KB_ID", "87GR7ILJEF")
+BEDROCK_GUARDRAIL_ID = os.getenv("BEDROCK_GUARDRAIL_ID") or None
+BEDROCK_GUARDRAIL_VERSION = os.getenv("BEDROCK_GUARDRAIL_VERSION", "1")

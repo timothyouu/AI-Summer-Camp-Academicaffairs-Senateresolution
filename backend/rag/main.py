@@ -1,12 +1,13 @@
 import boto3
+from config import MODEL_ID, REGION
 
 client = boto3.client(
     "bedrock-runtime",
-    region_name="us-west-2"
+    region_name=REGION,
 )
 
 response = client.converse(
-    modelId="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    modelId=MODEL_ID,
     messages=[
         {
             "role": "user",
