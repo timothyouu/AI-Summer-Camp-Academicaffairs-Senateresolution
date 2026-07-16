@@ -79,7 +79,9 @@ class AgentPipeline:
 
     @staticmethod
     def _retrieve(topic: str) -> list[GroundedPassage]:
-        return [AgentPipeline._passage(item) for item in search(topic, k=10)]
+        # Wide k so both sides of a divergence can be compared; a narrow top-k
+        # returns one source and variance can never fire (lambdaspec.md §6-7).
+        return [AgentPipeline._passage(item) for item in search(topic, k=12)]
 
     @staticmethod
     def _passage(item: SearchResult) -> GroundedPassage:
@@ -182,6 +184,12 @@ class AgentPipeline:
             try:
                 answer = self.llm.generate("Re-read the complete supplied passages. Return JSON {context_valid: boolean, confidence: 0..1}. A conflict is valid only when both quoted claims apply to the same topic and conditions.", json.dumps({"analysis": analysis.model_dump(), "passages": [item.model_dump() for item in passages]}), json_mode=True)
                 parsed = json.loads(answer)
+                # A live model often answers a "return JSON {..}" instruction with a
+                # JSON array or scalar. json.loads succeeds, so this is not a decode
+                # error; treat any non-object shape as an unconfirmed verification
+                # rather than letting parsed.get(...) raise and 500 the request.
+                if not isinstance(parsed, dict):
+                    parsed = {}
                 context_valid = parsed.get("context_valid") is True
                 confidence = float(parsed.get("confidence", 0.0))
             except (RuntimeError, ValueError, TypeError, json.JSONDecodeError):

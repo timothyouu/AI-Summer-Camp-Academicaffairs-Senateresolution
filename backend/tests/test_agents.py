@@ -79,6 +79,48 @@ def test_scripted_cba_handbook_conflict_is_verified_and_escalated() -> None:
     assert len(store.created) == 1
 
 
+class _ArrayVerifierLLM:
+    """Simulates a live Bedrock/Claude model that answers the verify step with a
+    JSON array instead of the requested ``{context_valid, confidence}`` object.
+
+    json.loads succeeds, so this is not a decode error the pipeline already
+    caught — before the fix, ``parsed.get(...)`` raised AttributeError and 500'd
+    the request. This shape only appears on the authoritative path; locally
+    ``llm.generate`` raises and the deterministic fallback runs instead.
+    """
+
+    def generate(self, system: str, user: str, json_mode: bool = False) -> str:
+        assert json_mode
+        if "blind policy claim extractor" in system:
+            item = json.loads(user)[0]
+            modality = "must_not" if "must not" in item["text"].lower() else "may"
+            return json.dumps([{
+                "subject": "prior service credit", "modality": modality,
+                "citation_span": item["text"], "source": item["source"],
+                "section": item["section"], "topic": item["topic"],
+            }])
+        if "Compare only claims" in system:
+            values = json.loads(user)
+            return json.dumps([{
+                "classification": "contradiction", "typology": "direct_contradiction",
+                "topic": values["topic"], "claim_a": values["claims"][0],
+                "claim_b": values["claims"][1], "explanation": "The claims conflict.",
+            }])
+        # Deviant shape: array, not the requested object.
+        return json.dumps([{"context_valid": True, "confidence": 0.9}])
+
+
+def test_verifier_survives_non_object_json_from_live_model() -> None:
+    result = AgentPipeline(llm=_ArrayVerifierLLM(), store=MemoryStore()).run(
+        "service credit", passages=_passages(),
+    )
+    # The candidate contradiction is detected but cannot be confirmed from a
+    # malformed verification response, so it is rejected rather than crashing.
+    assert result.analyses[0].classification == "contradiction"
+    assert result.verified_conflicts[0].accepted is False
+    assert result.verified_conflicts[0].context_valid is False
+
+
 def test_abstains_when_no_grounded_normative_claim_exists() -> None:
     passage = GroundedPassage(text="This section provides historical background.", span="This section provides historical background.", source="History", section="1")
     result = AgentPipeline(store=MemoryStore()).run("unanswered question", passages=[passage])

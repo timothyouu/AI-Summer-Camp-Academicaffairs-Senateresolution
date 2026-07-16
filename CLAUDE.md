@@ -205,10 +205,29 @@ squashing it — same pattern as the DynamoDB and MVP merges above).
   somewhere, not a verified-working resource. `implementation-aws.md`'s honesty check and §4 now
   cross-reference this.
 
+## Variance Layer (2026-07-15, `lambda-variance-spec` branch; merged to main 2026-07-16)
+Implements the smallest MVP slice of `lambdaspec.md`: a soft "policy variance" re-labeling of the existing pipeline output. **Layer over, never a fork** — reads `PipelineResult`, re-labels, logs; does not re-implement retrieval or verification. Verifier is now **130 backend tests** (128 + 2 no-variance/live-shape regressions) + `cd frontend && npx tsc --noEmit && npm run build`.
+- **New:** `backend/app/agents/variance.py` — `VarianceSeverity` (7-value Literal), `VarianceItem`/`VarianceReport` (Pydantic), pure `classify_severity(analysis)`, `detect_variance(question, result)`, `soft_language(report, role)`, `log_variance(report, store=None)`. Constants `SOFT_SUMMARY` and `VARIANCE_ESCALATION`. Plus `backend/tests/test_variance.py`.
+- **Escalation wording decided:** `VARIANCE_ESCALATION` uses the PRD denied-topic string *"consult your dean, the Provost's office, or the appropriate office"* — NOT the customer's "Faculty Affairs / Labor Relations" ask, which contradicts the governing PRD (lambdaspec.md §9/§15 Q2).
+- **Authority is derived, not extracted, and reviewer-only:** `authority_rank` comes from a `doc_type` lookup (`cba` 100 > `handbook` 60 > `policystat` 40 > `catalog` 20, default 10) read off the already-retrieved `GroundedPassage` — **no schema change, no LLM pass**. `soft_language(role="employee")` returns only the soft summary + escalation; the existing `shape_response_for_role` still strips sources/ids from the `ConflictSignal`. Employees never see source names in the *attribution*, severity, or authority.
+- **Wiring:** `chat.py` `_agent_grounded_answer(result, question, store=None)` calls `detect_variance` → `log_variance` → attaches `soft_language(reviewer)` to `ConflictSignal.guidance`. Wire contract (`ConflictSignal`/`ChatResponse`) unchanged → zero frontend change. Retrieval widened: `chat.py` local-index `k=6`→`k=12`, `agents/pipeline.py` `_retrieve` `k=10`→`k=12` (lambdaspec.md §6-7).
+- **Logging fallback:** `log_variance` reuses the idempotent `conflict_store().create_or_get`; a store failure is caught and downgraded to a `logger.warning` (CloudWatch) so a logging failure never fails the chat response (lambdaspec.md §11). Zero new AWS resources/IAM/env vars — reuses `DDB_CONFLICTS_TABLE`/`BEDROCK_KB_ID`.
+- **Live no-variance guardrails (2026-07-16):** two crashes/false-positives that only manifested on the live authoritative Bedrock path (locally masked because `llm.generate` raises → deterministic fallback fabricates contradictions for every question):
+  - `detect_variance` now abstains unless ≥2 distinct grounded sources exist (lambdaspec.md §7). A single benign `may` claim on a normal informational question ("What is the purpose of the University Handbook?") no longer manufactures a false variance, logs, or adds soft language.
+  - `AgentPipeline._verify` coerces a non-object verifier response (a live model answering the "return JSON {..}" instruction with an array/scalar) to an unconfirmed verification instead of letting `parsed.get(...)` raise `AttributeError` → 500.
+- **Deferred per §15 (not built):** dedicated variance table (Q4), async log-writer Lambda (Q6), variance on `/api/check-resolution` (Q7), self-consistency N-run gate (Q10), hybrid/rerank (Q11), section re-chunking + KB re-ingest (Q12).
+- **Local verifier note:** this shell injects `BEDROCK_KB_ID`/`AWS_REGION`/`AWS_PROFILE` via Claude Code's own Bedrock config (`CLAUDE_CODE_USE_BEDROCK=1`), which flips the app into AWS mode. Run tests with those unset: `env -u BEDROCK_KB_ID -u AWS_REGION -u AWS_PROFILE python -m pytest backend/tests -q`. The local index must be built first (`python -m backend.scripts.build_index`).
+
 ## Last Updated
-2026-07-16 — Merged Alyssa's `feature/rag` Bedrock RAG spike (`backend/rag/`) into `prod` as a real
+2026-07-16 — Merged `lambda-variance-spec` (policy variance layer, see Variance Layer section) and
+the latest `feature/rag` guardrail commit into `main`, and updated `prod` to match. Verifier now
+**130 backend tests** + tsc + vite build.
+
+Previous: 2026-07-16 — Merged Alyssa's `feature/rag` Bedrock RAG spike (`backend/rag/`) into `prod` as a real
 merge commit, reconciled its config to the env-gated pattern, and documented that it carries
 unverified-but-real-looking Knowledge Base IDs. See the Feature/rag Merge section.
+
+Previous: 2026-07-16 — Fixed two live-only variance defects on the `lambda-variance-spec` branch (no-variance false positive from a single grounded source; `_verify` 500 on a non-object verifier response). See the Variance Layer section.
 
 Previous: 2026-07-16 — Merged teammate PR #4 (source lifecycle, per-user permissions, citation links, persistent
 drafting workspace) into `main` and `prod`, resolved the `llm_revision` conflict, fixed merge seams,
