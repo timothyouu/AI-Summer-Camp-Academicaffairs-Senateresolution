@@ -122,11 +122,44 @@ interface BackendDraftRevision {
   version: number;
   revised_text: string;
   rationale: string;
+  title: string;
+  owner: string;
+  status: DraftStatus;
   overlaps: BackendResolutionFinding[];
   duplicates: BackendResolutionFinding[];
   conflicts: BackendResolutionFinding[];
   recommendation: string;
   agent_trace: BackendAgentTrace[];
+}
+interface BackendDraftVersion {
+  draft_id: string;
+  version: number;
+  title: string;
+  owner: string;
+  status: DraftStatus;
+  text: string;
+  source_text: string;
+  instruction: string;
+  suggestion: string;
+  restored_from_version: number | null;
+  created_at: string;
+}
+interface BackendDraftSummary {
+  draft_id: string;
+  title: string;
+  owner: string;
+  status: DraftStatus;
+  latest_version: number;
+  latest_text: string;
+  updated_at: string;
+}
+interface BackendDraftComparison {
+  draft_id: string;
+  from_version: number;
+  to_version: number;
+  from_text: string;
+  to_text: string;
+  unified_diff: string;
 }
 
 // Bedrock-backed endpoints (chat, resolution checks) run retrieval plus a
@@ -410,8 +443,9 @@ export function getReviewSubmission(): ReviewSubmission | null {
     if (typeof value !== "object" || value === null || !("title" in value) || !("text" in value)) return null;
     const { title, text } = value;
     const fileName = "fileName" in value ? value.fileName : undefined;
-    if (typeof title !== "string" || typeof text !== "string" || (fileName !== undefined && typeof fileName !== "string")) return null;
-    return fileName === undefined ? { title, text } : { title, text, fileName };
+    const draftId = "draftId" in value ? value.draftId : undefined;
+    if (typeof title !== "string" || typeof text !== "string" || (fileName !== undefined && typeof fileName !== "string") || (draftId !== undefined && typeof draftId !== "string")) return null;
+    return { title, text, ...(fileName === undefined ? {} : { fileName }), ...(draftId === undefined ? {} : { draftId }) };
   } catch {
     return null;
   }
@@ -845,16 +879,149 @@ export interface DraftRevision {
   version: number;
   revisedText: string;
   rationale: string;
+  title: string;
+  owner: string;
+  status: DraftStatus;
   findings: ReviewAnalysis["findings"];
   recommendation: string;
   agentTrace: AgentTraceStep[];
 }
 
-export async function reviseDraft(text: string, draftId?: string): Promise<DraftRevision> {
+export type DraftStatus = "draft" | "in_review" | "archived";
+
+export interface DraftVersionRecord {
+  draftId: string;
+  version: number;
+  title: string;
+  owner: string;
+  status: DraftStatus;
+  text: string;
+  sourceText: string;
+  instruction: string;
+  suggestion: string;
+  restoredFromVersion: number | null;
+  createdAt: string;
+}
+
+export interface DraftSummaryRecord {
+  draftId: string;
+  title: string;
+  owner: string;
+  status: DraftStatus;
+  latestVersion: number;
+  latestText: string;
+  updatedAt: string;
+}
+
+export interface DraftComparisonRecord {
+  draftId: string;
+  fromVersion: number;
+  toVersion: number;
+  fromText: string;
+  toText: string;
+  unifiedDiff: string;
+}
+
+const mapDraftVersion = (value: BackendDraftVersion): DraftVersionRecord => ({
+  draftId: value.draft_id,
+  version: value.version,
+  title: value.title,
+  owner: value.owner,
+  status: value.status,
+  text: value.text,
+  sourceText: value.source_text,
+  instruction: value.instruction,
+  suggestion: value.suggestion,
+  restoredFromVersion: value.restored_from_version,
+  createdAt: value.created_at,
+});
+
+const mapDraftSummary = (value: BackendDraftSummary): DraftSummaryRecord => ({
+  draftId: value.draft_id,
+  title: value.title,
+  owner: value.owner,
+  status: value.status,
+  latestVersion: value.latest_version,
+  latestText: value.latest_text,
+  updatedAt: value.updated_at,
+});
+
+export async function listDrafts(): Promise<DraftSummaryRecord[]> {
+  const backend = await backendRequest<BackendDraftSummary[]>("/api/draft");
+  if (backend === null) return [];
+  return backend.map(mapDraftSummary);
+}
+
+export async function getDraftVersions(draftId: string): Promise<DraftVersionRecord[]> {
+  const backend = await backendRequest<BackendDraftVersion[]>(`/api/draft/${encodeURIComponent(draftId)}/versions`);
+  if (backend === null) throw new Error("Unable to load draft versions.");
+  return backend.map(mapDraftVersion);
+}
+
+export async function saveDraftVersion(input: {
+  draftId?: string;
+  title: string;
+  text: string;
+  status: DraftStatus;
+}): Promise<DraftVersionRecord> {
+  const backend = await backendRequest<BackendDraftVersion>("/api/draft/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: input.title,
+      text: input.text,
+      status: input.status,
+      ...(input.draftId === undefined ? {} : { draft_id: input.draftId }),
+    }),
+  });
+  if (backend === null) throw new Error("Unable to save this draft.");
+  return mapDraftVersion(backend);
+}
+
+export async function restoreDraftVersion(draftId: string, version: number): Promise<DraftVersionRecord> {
+  const backend = await backendRequest<BackendDraftVersion>(
+    `/api/draft/${encodeURIComponent(draftId)}/restore/${version}`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+  );
+  if (backend === null) throw new Error("Unable to restore this draft version.");
+  return mapDraftVersion(backend);
+}
+
+export async function compareDraftVersions(
+  draftId: string,
+  fromVersion: number,
+  toVersion: number,
+): Promise<DraftComparisonRecord> {
+  const query = new URLSearchParams({ from_version: String(fromVersion), to_version: String(toVersion) });
+  const backend = await backendRequest<BackendDraftComparison>(
+    `/api/draft/${encodeURIComponent(draftId)}/compare?${query.toString()}`,
+  );
+  if (backend === null) throw new Error("Unable to compare these draft versions.");
+  return {
+    draftId: backend.draft_id,
+    fromVersion: backend.from_version,
+    toVersion: backend.to_version,
+    fromText: backend.from_text,
+    toText: backend.to_text,
+    unifiedDiff: backend.unified_diff,
+  };
+}
+
+export async function reviseDraft(
+  text: string,
+  draftId?: string,
+  options: { title?: string; instruction?: string; status?: DraftStatus } = {},
+): Promise<DraftRevision> {
   const backend = await backendRequest<BackendDraftRevision>("/api/draft/revise", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, ...(draftId === undefined ? {} : { draft_id: draftId }) }),
+    body: JSON.stringify({
+      text,
+      title: options.title ?? "Untitled draft",
+      instruction: options.instruction ?? "",
+      status: options.status ?? "draft",
+      ...(draftId === undefined ? {} : { draft_id: draftId }),
+    }),
   }, AGENT_REQUEST_TIMEOUT_MS, agentBaseUrl);
   if (backend === null) throw new Error("The drafting assistant is unavailable. Start the backend and try again.");
   return {
@@ -862,6 +1029,9 @@ export async function reviseDraft(text: string, draftId?: string): Promise<Draft
     version: backend.version,
     revisedText: backend.revised_text,
     rationale: backend.rationale,
+    title: backend.title,
+    owner: backend.owner,
+    status: backend.status,
     recommendation: backend.recommendation,
     findings: [
       ...backend.overlaps.map((finding) => ({ type: "Overlap" as const, source: `${finding.source} • ${finding.section}` })),

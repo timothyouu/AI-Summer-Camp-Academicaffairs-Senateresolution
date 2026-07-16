@@ -51,6 +51,62 @@ def test_revise_endpoint_persists_versions() -> None:
         assert second.status_code == 200 and second.json()["version"] == 2
         versions = client.get(f"/api/draft/{body['draft_id']}/versions")
         assert versions.status_code == 200 and len(versions.json()) == 2
+        assert versions.json()[0]["text"] == body["revised_text"]
+        assert versions.json()[0]["source_text"] == "Faculty must keep a three-inch binder for WPAF evidence."
+
+
+def test_save_list_compare_and_restore_workflow() -> None:
+    with TestClient(app) as client:
+        first = client.post("/api/draft/save", json={
+            "title": "Accessible Technology Resolution",
+            "text": "Campus websites must pass an accessibility review.",
+            "status": "draft",
+        })
+        assert first.status_code == 200
+        draft_id = first.json()["draft_id"]
+
+        second = client.post("/api/draft/save", json={
+            "draft_id": draft_id,
+            "title": "Accessible Technology Resolution",
+            "text": "Campus websites must pass an annual accessibility review.",
+            "status": "in_review",
+        })
+        assert second.status_code == 200 and second.json()["version"] == 2
+
+        listed = client.get("/api/draft")
+        assert listed.status_code == 200
+        summary = next(item for item in listed.json() if item["draft_id"] == draft_id)
+        assert summary["latest_version"] == 2
+        assert summary["status"] == "in_review"
+        assert "annual" in summary["latest_text"]
+
+        compared = client.get(
+            f"/api/draft/{draft_id}/compare",
+            params={"from_version": 1, "to_version": 2},
+        )
+        assert compared.status_code == 200
+        assert "+Campus websites must pass an annual accessibility review." in compared.json()["unified_diff"]
+
+        restored = client.post(f"/api/draft/{draft_id}/restore/1", json={})
+        assert restored.status_code == 200
+        assert restored.json()["version"] == 3
+        assert restored.json()["restored_from_version"] == 1
+        assert restored.json()["text"] == first.json()["text"]
+
+
+def test_revision_instruction_is_persisted_with_generated_version() -> None:
+    with TestClient(app) as client:
+        response = client.post("/api/draft/revise", json={
+            "title": "Workload Resolution",
+            "text": "Faculty may submit workload documentation.",
+            "instruction": "Make the requirement less restrictive.",
+        })
+        assert response.status_code == 200
+        body = response.json()
+        versions = client.get(f"/api/draft/{body['draft_id']}/versions").json()
+        assert versions[-1]["instruction"] == "Make the requirement less restrictive."
+        assert versions[-1]["text"] == body["revised_text"]
+        assert body["title"] == "Workload Resolution"
 
 
 def test_dynamodb_version_allocation_retries_a_concurrent_writer(monkeypatch: Any) -> None:

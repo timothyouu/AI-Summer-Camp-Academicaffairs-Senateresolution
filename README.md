@@ -8,6 +8,11 @@ existing sources, and `can_add` alone cannot replace a source. Registry entries
 carry canonical URLs plus a section-link index; chat citations and the shared
 resource catalog resolve through that same metadata.
 
+Reviewer drafts are persistent rather than browser-only. The Drafts workspace
+supports titled drafts, conversational revision instructions, status changes,
+version history, version comparison, and restoring an older version as a new
+version. SQLite is used locally and `DDB_DRAFTS_TABLE` activates DynamoDB/S3.
+
 ## Run locally
 
 From the repository root:

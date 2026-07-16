@@ -22,6 +22,7 @@ export interface ReviewSubmission {
   title: string;
   text: string;
   fileName?: string;
+  draftId?: string;
 }
 
 export interface LibraryItem {
