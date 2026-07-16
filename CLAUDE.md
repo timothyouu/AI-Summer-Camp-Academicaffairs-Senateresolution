@@ -82,9 +82,11 @@ unset as shown, and build the local index first.
 `backend/tests/conftest.py`, `backend/tests/test_api.py`, `backend/tests/test_ingest_retrieval.py`.
 
 ## Active Constraints
-- No AWS credentials on this WSL machine — no live-AWS verification has been run from this repo.
-  Region is `us-west-2` for everything. `aws` CLI v2.35 installed but no profile configured.
-- Handbook PDF not yet in `data/corpus/`; CBA source: `/mnt/c/Users/timot/Downloads/Unit 3 CBA 2022-2026.pdf`.
+- **Updated 2026-07-16 — AWS access:** this WSL uses the AWS IAM Identity Center profile
+  `csub-senate`; region remains `us-west-2` (Oregon) for everything.
+- **Updated 2026-07-16 — real corpus:** `CSUB University_Handbook_2025.pdf` and
+  `Unit 3 CBA 2022-2026.pdf` are present in `data/corpus/` and declared in
+  `infra/scripts/prepare_corpus.py::CORPUS_SOURCES`.
 - **Demo honesty:** synthetic data disclosed to customer; no fabricated "real" sources. The
   `synthetic-*.md` corpus files are disclosed stand-ins — keep the naming. See README.md's "Demo
   integrity" paragraph for the public wording.
