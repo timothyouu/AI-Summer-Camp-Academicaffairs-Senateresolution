@@ -14,7 +14,7 @@ from .database import connection, initialize_database
 from .ingest import _parse_front_matter, discover_corpus_files
 from .models import SourceLifecycleStatus, SourceRecord, SourceStatusUpdate, SourceUpsert
 from .permissions import require_can_edit_source
-from .stores import _ddb_decode, _ddb_encode
+from .stores import _ddb_decode, _ddb_encode, _timestamp
 
 router = APIRouter(prefix="/api/sources", tags=["source registry"])
 
@@ -41,7 +41,7 @@ def _record(values: dict[str, object]) -> SourceRecord:
         edition_year=int(values["edition_year"]) if values.get("edition_year") not in (None, "") else None,
         is_current=bool(int(values.get("is_current", 1))), s3_key=str(values.get("s3_key", "")),
         passages=int(values.get("passages", 0)),
-        updated_at=updated if isinstance(updated, datetime) else datetime.fromisoformat(str(updated)),
+        updated_at=_timestamp(updated),
     )
 
 

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timezone
 import json
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from backend.app import drafting
@@ -12,11 +15,23 @@ from backend.app.drafting import (
     DynamoDBDraftStore,
     deterministic_revision,
     draft_store,
+    draft_versions,
+    get_draft,
+    list_drafts,
     llm_revision,
+    restore_draft_version,
     revise_draft,
+    save_draft,
 )
 from backend.app.main import app
-from backend.app.models import DraftReviseRequest, DraftVersion, ResolutionFinding
+from backend.app.models import (
+    DraftReviseRequest,
+    DraftRestoreRequest,
+    DraftSaveRequest,
+    DraftVersion,
+    ResolutionFinding,
+)
+from backend.app.permissions import ADMIN_EMAIL
 
 
 def test_version_numbers_increment_per_draft() -> None:
@@ -224,3 +239,116 @@ def test_dynamodb_version_allocation_retries_a_concurrent_writer(monkeypatch: An
     version = store.add_version("draft-race", "ours", "retry")
     assert version.version == 2
     assert store.client.put_calls == 2  # type: ignore[attr-defined]
+
+
+def test_dynamodb_add_version_copies_new_version_to_s3_when_corpus_bucket_configured(
+    monkeypatch: Any,
+) -> None:
+    """DynamoDBDraftStore.add_version must mirror each new version to S3 once
+    CORPUS_BUCKET is configured, without requiring a real boto3 install."""
+
+    class Client:
+        def query(self, **_: object) -> dict[str, object]:
+            return {"Items": []}
+
+        def put_item(self, **_: object) -> dict[str, object]:
+            return {}
+
+    class FakeS3:
+        def __init__(self) -> None:
+            self.put_calls: list[dict[str, object]] = []
+
+        def put_object(self, **kwargs: object) -> dict[str, object]:
+            self.put_calls.append(kwargs)
+            return {}
+
+    fake_s3 = FakeS3()
+
+    def fake_boto3_client(service_name: str, **kwargs: object) -> Any:
+        assert service_name == "s3"
+        assert kwargs.get("region_name") == "us-west-2"
+        return fake_s3
+
+    monkeypatch.setenv("DDB_DRAFTS_TABLE", "DraftVersions")
+    monkeypatch.setenv("CORPUS_BUCKET", "policy-corpus")
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=fake_boto3_client))
+
+    store = DynamoDBDraftStore(Client())
+    version = store.add_version("draft-s3", "Draft body text.", "Saved.")
+
+    assert version.version == 1
+    assert len(fake_s3.put_calls) == 1
+    call = fake_s3.put_calls[0]
+    assert call["Bucket"] == "policy-corpus"
+    assert call["Key"] == "drafts/draft-s3/v1.md"
+    assert call["Body"] == b"Draft body text."
+    assert call["ContentType"] == "text/markdown"
+
+
+def test_owner_can_access_own_draft_but_other_reviewer_is_forbidden() -> None:
+    created = save_draft(
+        DraftSaveRequest(text="Original text.", title="Owner Draft"),
+        None, "owner-a@campus.edu",
+    )
+    draft_id = created.draft_id
+
+    # The owner can read and act on their own draft.
+    summary = get_draft(draft_id, None, "owner-a@campus.edu")
+    assert summary.draft_id == draft_id
+    assert [item.version for item in draft_versions(draft_id, None, "owner-a@campus.edu")] == [1]
+
+    # A different reviewer identity is forbidden from every draft-workspace route.
+    with pytest.raises(HTTPException) as get_error:
+        get_draft(draft_id, None, "other@campus.edu")
+    assert get_error.value.status_code == 403
+
+    with pytest.raises(HTTPException) as versions_error:
+        draft_versions(draft_id, None, "other@campus.edu")
+    assert versions_error.value.status_code == 403
+
+    with pytest.raises(HTTPException) as restore_error:
+        restore_draft_version(
+            draft_id, created.version, DraftRestoreRequest(), None, "other@campus.edu",
+        )
+    assert restore_error.value.status_code == 403
+
+    with pytest.raises(HTTPException) as save_error:
+        save_draft(
+            DraftSaveRequest(draft_id=draft_id, text="Hijack attempt.", title="Owner Draft"),
+            None, "other@campus.edu",
+        )
+    assert save_error.value.status_code == 403
+
+    with pytest.raises(HTTPException) as revise_error:
+        revise_draft(
+            DraftReviseRequest(text="Hijack revision.", draft_id=draft_id),
+            None, "other@campus.edu",
+        )
+    assert revise_error.value.status_code == 403
+
+
+def test_admin_can_read_any_users_draft() -> None:
+    created = save_draft(
+        DraftSaveRequest(text="Admin visibility test.", title="Admin Draft"),
+        None, "owner-b@campus.edu",
+    )
+
+    summary = get_draft(created.draft_id, None, ADMIN_EMAIL)
+    assert summary.draft_id == created.draft_id
+    assert [item.version for item in draft_versions(created.draft_id, None, ADMIN_EMAIL)] == [1]
+
+
+def test_list_drafts_hides_other_users_drafts_from_non_admins() -> None:
+    mine = save_draft(DraftSaveRequest(text="Mine.", title="Mine"), None, "owner-c@campus.edu")
+    theirs = save_draft(DraftSaveRequest(text="Theirs.", title="Theirs"), None, "owner-d@campus.edu")
+
+    only_mine = list_drafts(None, "owner-c@campus.edu")
+    mine_ids = {item.draft_id for item in only_mine}
+    assert mine.draft_id in mine_ids
+    assert theirs.draft_id not in mine_ids
+    assert all(item.owner == "owner-c@campus.edu" for item in only_mine)
+
+    everything = list_drafts(None, ADMIN_EMAIL)
+    all_ids = {item.draft_id for item in everything}
+    assert {mine.draft_id, theirs.draft_id}.issubset(all_ids)

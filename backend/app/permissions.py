@@ -12,7 +12,7 @@ from .dynamodb_client import get_dynamodb_client
 from .config import get_settings
 from .database import connection, initialize_database
 from .models import PermissionRecord, PermissionUpdate, SourceType
-from .stores import _ddb_decode, _ddb_encode
+from .stores import _ddb_decode, _ddb_encode, _timestamp
 
 
 router = APIRouter(prefix="/api/permissions", tags=["permissions"])
@@ -28,7 +28,7 @@ def _record(values: dict[str, object]) -> PermissionRecord:
         can_add=bool(int(values.get("can_add", 0))),
         can_edit=bool(int(values.get("can_edit", 0))),
         granted_by=str(values.get("granted_by", "")),
-        updated_at=updated if isinstance(updated, datetime) else datetime.fromisoformat(str(updated)),
+        updated_at=_timestamp(updated),
     )
 
 

@@ -23,8 +23,8 @@ from .models import (
     DraftVersion,
     ResolutionFinding,
 )
-from .permissions import identity_email
-from .stores import _ddb_decode, _ddb_encode, _ddb_error_code
+from .permissions import ADMIN_EMAIL, identity_email
+from .stores import _ddb_decode, _ddb_encode, _ddb_error_code, _timestamp
 
 router = APIRouter(prefix="/api/draft", tags=["drafting"])
 
@@ -43,7 +43,7 @@ def _version(values: dict[str, object]) -> DraftVersion:
         instruction=str(values.get("instruction", "")),
         suggestion=str(values.get("suggestion", "")),
         restored_from_version=int(restored) if restored not in (None, "") else None,
-        created_at=created if isinstance(created, datetime) else datetime.fromisoformat(str(created)),
+        created_at=_timestamp(created),
     )
 
 
@@ -57,6 +57,23 @@ def _summary(version: DraftVersion) -> DraftSummary:
         latest_text=version.text,
         updated_at=version.created_at,
     )
+
+
+def _requester(authorization: str | None, x_user_email: str | None) -> str:
+    return identity_email(authorization, x_user_email) or "local-reviewer"
+
+
+def _owner_of(version: DraftVersion) -> str:
+    """Legacy versions saved before owner tracking default to the local demo reviewer."""
+    return version.owner or "local-reviewer"
+
+
+def _ensure_owner_access(versions: list[DraftVersion], requester: str) -> None:
+    """Raise 403 unless the requester owns the draft's latest version or is the admin."""
+    if not versions or requester == ADMIN_EMAIL:
+        return
+    if _owner_of(versions[-1]) != requester:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized to access this draft")
 
 
 class DraftStore(Protocol):
@@ -271,6 +288,9 @@ def revise_draft(
     x_user_email: str | None = Header(default=None),
     _: None = Depends(require_reviewer),
 ) -> DraftReviseResponse:
+    requester = _requester(authorization, x_user_email)
+    if payload.draft_id:
+        _ensure_owner_access(draft_store().list_versions(payload.draft_id), requester)
     draft_id = payload.draft_id or str(uuid4())
     pipeline = create_pipeline()
     result = pipeline.run(payload.text, draft=True)
@@ -287,7 +307,7 @@ def revise_draft(
         revised, rationale = deterministic_revision(
             payload.text, conflicts, output.recommendation, payload.instruction,
         )
-    owner = identity_email(authorization, x_user_email) or "local-reviewer"
+    owner = requester
     version = draft_store().add_version(
         draft_id, revised, rationale, title=payload.title.strip(), owner=owner,
         status=payload.status, source_text=payload.text, instruction=payload.instruction.strip(),
@@ -321,7 +341,10 @@ def save_draft(
     x_user_email: str | None = Header(default=None),
     _: None = Depends(require_reviewer),
 ) -> DraftVersion:
-    owner = identity_email(authorization, x_user_email) or "local-reviewer"
+    requester = _requester(authorization, x_user_email)
+    if payload.draft_id:
+        _ensure_owner_access(draft_store().list_versions(payload.draft_id), requester)
+    owner = requester
     return draft_store().add_version(
         payload.draft_id or str(uuid4()), payload.text, "Saved manually.",
         title=payload.title.strip(), owner=owner, status=payload.status,
@@ -330,23 +353,42 @@ def save_draft(
 
 
 @router.get("", response_model=list[DraftSummary])
-def list_drafts(_: None = Depends(require_reviewer)) -> list[DraftSummary]:
-    return draft_store().list_drafts()
+def list_drafts(
+    authorization: str | None = Header(default=None),
+    x_user_email: str | None = Header(default=None),
+    _: None = Depends(require_reviewer),
+) -> list[DraftSummary]:
+    requester = _requester(authorization, x_user_email)
+    summaries = draft_store().list_drafts()
+    if requester == ADMIN_EMAIL:
+        return summaries
+    return [item for item in summaries if (item.owner or "local-reviewer") == requester]
 
 
 @router.get("/{draft_id}", response_model=DraftSummary)
-def get_draft(draft_id: str, _: None = Depends(require_reviewer)) -> DraftSummary:
+def get_draft(
+    draft_id: str,
+    authorization: str | None = Header(default=None),
+    x_user_email: str | None = Header(default=None),
+    _: None = Depends(require_reviewer),
+) -> DraftSummary:
     versions = draft_store().list_versions(draft_id)
     if not versions:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft not found")
+    _ensure_owner_access(versions, _requester(authorization, x_user_email))
     return _summary(versions[-1])
 
 
 @router.get("/{draft_id}/versions", response_model=list[DraftVersion])
 def draft_versions(
-    draft_id: str, _: None = Depends(require_reviewer)
+    draft_id: str,
+    authorization: str | None = Header(default=None),
+    x_user_email: str | None = Header(default=None),
+    _: None = Depends(require_reviewer),
 ) -> list[DraftVersion]:
-    return draft_store().list_versions(draft_id)
+    versions = draft_store().list_versions(draft_id)
+    _ensure_owner_access(versions, _requester(authorization, x_user_email))
+    return versions
 
 
 @router.post("/{draft_id}/restore/{version}", response_model=DraftVersion)
@@ -362,6 +404,8 @@ def restore_draft_version(
     selected = next((item for item in versions if item.version == version), None)
     if selected is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft version not found")
+    requester = _requester(authorization, x_user_email)
+    _ensure_owner_access(versions, requester)
     latest = versions[-1]
     owner = identity_email(authorization, x_user_email) or latest.owner or "local-reviewer"
     return draft_store().add_version(
@@ -377,9 +421,13 @@ def compare_draft_versions(
     draft_id: str,
     from_version: int = Query(ge=1),
     to_version: int = Query(ge=1),
+    authorization: str | None = Header(default=None),
+    x_user_email: str | None = Header(default=None),
     _: None = Depends(require_reviewer),
 ) -> DraftComparison:
-    versions = {item.version: item for item in draft_store().list_versions(draft_id)}
+    all_versions = draft_store().list_versions(draft_id)
+    _ensure_owner_access(all_versions, _requester(authorization, x_user_email))
+    versions = {item.version: item for item in all_versions}
     first, second = versions.get(from_version), versions.get(to_version)
     if first is None or second is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft version not found")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit, urlunsplit
@@ -123,6 +124,12 @@ def apply_registry_policy(results: list[SearchResult], k: int) -> list[SearchRes
             for key in keys:
                 records[key] = record
     except Exception:
+        # Deliberate availability trade-off: an unreachable registry must not
+        # take chat down, but the pass-through means archived sources are not
+        # filtered until it recovers — make that visible instead of silent.
+        logging.getLogger(__name__).warning(
+            "Registry unavailable; serving retrieval results without lifecycle filtering"
+        )
         return results[:k]
     kept: list[SearchResult] = []
     for item in results:
