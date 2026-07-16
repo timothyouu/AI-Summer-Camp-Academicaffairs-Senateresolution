@@ -68,7 +68,7 @@ export DDB_RECURRING_QUESTIONS_TABLE=policy-intelligence-recurring-questions
 ./scripts/verify_dynamodb_tables.sh
 ```
 
-The `DYNAMODB_*` names from `Yaza_DynamoDB_Work_Summary.md` §7 are accepted as
+The `DYNAMODB_*` names from `docs/archive/Yaza_DynamoDB_Work_Summary.md` §7 are accepted as
 aliases for five of the above, so that runbook still works —
 `DYNAMODB_SOURCE_REGISTRY_TABLE` sets the registry table,
 `DYNAMODB_ACCESS_CONTROL_TABLE` the permissions table, and

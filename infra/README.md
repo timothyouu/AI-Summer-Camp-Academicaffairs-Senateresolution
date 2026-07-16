@@ -2,9 +2,12 @@
 
 One CDK stack (`PolicyIntelligenceStack`, defined in
 `infra/stacks/policy_intelligence_stack.py`) implementing the target
-architecture in `implementation2.md` §2 / §3 Phase A: S3 corpus bucket,
+architecture in `docs/archive/implementation2.md` §2 / §3 Phase A: S3 corpus bucket,
 Bedrock Knowledge Base on an OpenSearch Serverless vector collection,
 DynamoDB tables, Cognito, and an API Gateway HTTP API + Lambda.
+
+See also `../AWS_SETUP.md` (ordered deploy runbook for this stack) and
+`../implementation-aws.md` (AWS account/access onboarding, IAM setup).
 
 The stack creates `ConflictLog` and `Uploads` directly. It imports five retained
 application-memory tables by name—feedback, recurring questions, access
@@ -81,7 +84,7 @@ on top, and zips the result. No manual bundling step remains:
   config → stores → models — reaches nothing else beyond the stdlib;
   `boto3` is imported lazily and ships in the Lambda runtime).
 - **`CatalogScraperFn`** installs only `pydantic>=2.8,<3`, same reasoning as
-  `IngestionFn`. Per implementation3.md Task 6, the scraper itself is
+  `IngestionFn`. Per docs/archive/implementation3.md Task 6, the scraper itself is
   stdlib-only (`urllib`/`html.parser`, no `requests`/`beautifulsoup4`), so
   nothing scraper-specific needs bundling.
 
@@ -196,7 +199,7 @@ Lambda roles, etc.) — approve them.
      --data-source-id <BedrockDataSourceId>
    ```
    Verify with a console `retrieve` test for "service credit tenure clock"
-   per implementation2.md §3 Phase A step 2.
+   per docs/archive/implementation2.md §3 Phase A step 2.
 3. **Seed the DynamoDB conflict log.** The seed script is AWS-aware through
    `DDB_CONFLICTS_TABLE`; without this step the deployed table starts empty
    because Lambda startup intentionally does not seed AWS storage:
@@ -266,7 +269,7 @@ Lambda roles, etc.) — approve them.
 | `DdbDraftsTable` | `DDB_DRAFTS_TABLE` | `DraftVersions` — AI-drafting version history |
 | `CognitoUserPoolId` | `COGNITO_USER_POOL_ID` | |
 | `CognitoClientId` | `COGNITO_CLIENT_ID` | SPA app client, no secret |
-| `CognitoHostedUiUrl` | `VITE_COGNITO_DOMAIN` (frontend) | hosted UI domain for the `VITE_USE_COGNITO` flow (LOOP.md decision 5) |
+| `CognitoHostedUiUrl` | `VITE_COGNITO_DOMAIN` (frontend) | hosted UI domain for the `VITE_USE_COGNITO` flow (docs/archive/LOOP.md decision 5) |
 | `ApiUrl` | `VITE_API_BASE_URL` (frontend) | API Gateway HTTP API invoke URL |
 | `AgentFunctionUrl` | `VITE_AGENT_BASE_URL` (frontend) | Lambda Function URL for the two long-running agent endpoints (`POST /api/chat`, `POST /api/check-resolution`) — see note below |
 
@@ -290,7 +293,7 @@ so they stay authenticated in AWS mode.
 `CatalogScraperFn` has no S3 or EventBridge trigger — invoke it manually
 per catalog edition with the AWS CLI (or the console "Test" tab). It writes
 scraped pages into `CorpusBucketName` and upserts rows into
-`DdbRegistryTable`; per implementation3.md Task 2, archived editions are
+`DdbRegistryTable`; per docs/archive/implementation3.md Task 2, archived editions are
 down-ranked (`ARCHIVED_EDITION_WEIGHT = 0.5`) relative to the current one.
 The scraper writes Bedrock metadata sidecars under the data source's included
 `raw/` prefix. After both editions finish, start one Knowledge Base ingestion
