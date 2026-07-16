@@ -1,10 +1,12 @@
 # AWS Setup Guide — Policy Intelligence Assistant
 
-Companion to `implementation.md` (local demo) and `implementation2.md` (AWS migration plan, Phases A–D). This doc is the one-stop reference for **every teammate** to get access to the shared AWS account and stand up their own copy of, or contribute to, the services in the target architecture: S3, Bedrock (models + Knowledge Bases + Guardrails), OpenSearch Serverless, DynamoDB, Cognito, Lambda, API Gateway, Amplify, EventBridge, and the IAM permissions tying them together.
+Companion to `docs/archive/implementation.md` (local demo) and `docs/archive/implementation2.md` (AWS migration plan, Phases A–D). This doc is the one-stop reference for **every teammate** to get access to the shared AWS account and stand up their own copy of, or contribute to, the services in the target architecture: S3, Bedrock (models + Knowledge Bases + Guardrails), OpenSearch Serverless, DynamoDB, Cognito, Lambda, API Gateway, Amplify, EventBridge, and the IAM permissions tying them together.
 
 **Honesty check before you read further:** `aws sts get-caller-identity` still fails with `NoCredentials` on Tim's machine — there are no credentials configured here, and nothing in this doc has been verified live from this repo. That part hasn't changed. What has changed: as of 2026-07-16, Alyssa's `feature/rag` branch (merged into `prod` as `backend/rag/`, see its README) carries two real-looking Knowledge Base IDs — `HHFJ4IDG9M` (academic) and `87GR7ILJEF` (senate), both `us-west-2` — plus the exact Claude model id §3 recommends (`us.anthropic.claude-sonnet-4-5-20250929-v1:0`) hardcoded as a working default. That's evidence someone on the team has at least partly completed §3 (model access) and §4 (KB creation) on the shared account. It is **not** confirmation from Tim's machine — no credentials here means no way to run the verify commands below and check. Treat those two IDs as "probably real, provisioned by Alyssa," not "confirmed live." Every ARN, account ID, and resource name elsewhere in this doc that isn't one of those two IDs is still a `<placeholder>` — do not copy-paste anything else here expecting it to resolve. This is the guide for going from zero to working, together.
 
 **Region decision: `us-west-2` for everything.** Every resource in this doc — S3 buckets, Bedrock model access, Knowledge Bases, OpenSearch Serverless collections, DynamoDB tables, Cognito user pool, Lambda, API Gateway, Amplify backend, Guardrails, EventBridge rules — goes in `us-west-2`. Bedrock foundation-model access and Knowledge Bases are region-scoped; mixing regions is the single most common cause of "it worked in the console but my CLI call fails."
+
+**Scope note:** this doc is onboarding-oriented — how a new teammate gets AWS account access and understands the permission model. For the ordered deploy runbook against this repo's actual CDK stack (once you have access), see `AWS_SETUP.md`; for the CDK stack's internals and the real, as-built resource names, see `infra/README.md`. The two overlap in places (Bedrock/Cognito verify commands) but serve different audiences and are kept separate on purpose.
 
 ---
 
@@ -36,7 +38,7 @@ Companion to `implementation.md` (local demo) and `implementation2.md` (AWS migr
    ```
    Treat this second command as a connectivity/permission sanity check only (it needs just `bedrock:ListFoundationModels`) — an empty or errored result means you can't even reach Bedrock; a full list does not mean you have model access.
 
-If steps 4–5 both return clean output, you're unblocked for any phase of `implementation2.md`.
+If steps 4–5 both return clean output, you're unblocked for any phase of `docs/archive/implementation2.md`.
 
 ---
 
@@ -91,7 +93,7 @@ aws sts get-caller-identity --profile policy-assistant
 
 ### 1.1 What each phase needs (AWS managed policies, by name)
 
-Rather than hand-crafting a policy per phase, here's the fastest path using AWS managed policies, mapped to what `implementation2.md` Phase A–D actually touches:
+Rather than hand-crafting a policy per phase, here's the fastest path using AWS managed policies, mapped to what `docs/archive/implementation2.md` Phase A–D actually touches:
 
 | Phase | Managed policy | Covers |
 |---|---|---|
@@ -164,7 +166,7 @@ This is the **human/teammate** policy for exploring and testing the app's data p
 
 This is the part that trips people up: several AWS services act *as* other principals, and each hop needs its own explicit grant. Four chains matter for this project:
 
-1. **Lambda execution role → Bedrock / DynamoDB / S3.** The Lambda function (FastAPI via Mangum, per `implementation2.md` Phase B) runs as an IAM role, not as you. That role needs `bedrock:InvokeModel` + `bedrock:Retrieve` (to call the KB), `dynamodb:*Item`/`Query` on the `ConflictLog`/`Uploads` tables, and `s3:GetObject`/`PutObject` on the corpus bucket (for presigned uploads). Attach `AWSLambdaBasicExecutionRole` (for CloudWatch Logs) plus an inline policy shaped like Section 1.2's Bedrock/DynamoDB/S3 statements, scoped to this Lambda's specific resources.
+1. **Lambda execution role → Bedrock / DynamoDB / S3.** The Lambda function (FastAPI via Mangum, per `docs/archive/implementation2.md` Phase B) runs as an IAM role, not as you. That role needs `bedrock:InvokeModel` + `bedrock:Retrieve` (to call the KB), `dynamodb:*Item`/`Query` on the `ConflictLog`/`Uploads` tables, and `s3:GetObject`/`PutObject` on the corpus bucket (for presigned uploads). Attach `AWSLambdaBasicExecutionRole` (for CloudWatch Logs) plus an inline policy shaped like Section 1.2's Bedrock/DynamoDB/S3 statements, scoped to this Lambda's specific resources.
 2. **S3 event notification → ingestion Lambda invoke permission → `bedrock:StartIngestionJob` on the KB.** Three separate grants: (a) the S3 bucket's event notification config needs `lambda:InvokeFunction` permission granted *to* S3 as a resource-based policy on the Lambda (`aws lambda add-permission --principal s3.amazonaws.com`), (b) the ingestion Lambda's own execution role needs `bedrock:StartIngestionJob` scoped to the specific Knowledge Base ARN, and (c) that Knowledge Base's own service role (next point) needs to actually be able to read the object that triggered it.
 3. **Knowledge Base service role → S3 + OpenSearch Serverless data-access policy.** When you create a Bedrock Knowledge Base, Bedrock creates (or you provide) a service role that the KB assumes to do its own work — reading source objects from S3 and writing vectors to OpenSearch Serverless. That role needs `s3:GetObject`/`s3:ListBucket` on the corpus bucket **and** must be named in the OpenSearch Serverless collection's **data access policy** (a separate OpenSearch-native permissions object, not an IAM policy — see Section 4). Missing the data-access-policy entry is the most common KB-creation failure; the IAM role can be perfect and the sync will still fail with an OpenSearch authorization error if that role isn't in the collection's data access policy.
 4. **API Gateway JWT authorizer → Cognito user pool.** The HTTP API's JWT authorizer is configured with the Cognito user pool's issuer URL and app client ID — it validates tokens directly against Cognito's public JWKS endpoint, no IAM role in between. The thing to get right here isn't IAM, it's config: issuer must be `https://cognito-idp.<region>.amazonaws.com/<user-pool-id>` exactly, and the app client used to mint tokens must match the `audience`.
@@ -264,14 +266,14 @@ second data point alongside the steps below.
 
 **Setup (console is genuinely easier here — KB creation has several linked sub-resources the console wizard wires up for you):**
 1. Bedrock console (region `us-west-2`) → Knowledge Bases → Create.
-2. Data source: point at `s3://<account-id>-policy-corpus/`. Chunking strategy is a setting you select in the wizard, not a guaranteed default — choose fixed-size chunking at **~500 tokens / 20% overlap** to match `implementation2.md` Phase A.2's decision (the console's out-of-the-box default may differ, so set this explicitly rather than assuming it).
+2. Data source: point at `s3://<account-id>-policy-corpus/`. Chunking strategy is a setting you select in the wizard, not a guaranteed default — choose fixed-size chunking at **~500 tokens / 20% overlap** to match `docs/archive/implementation2.md` Phase A.2's decision (the console's out-of-the-box default may differ, so set this explicitly rather than assuming it).
 3. Embeddings model: **Titan Text Embeddings V2** (must already have model access from Section 3).
 4. Vector store: choose "Quick create a new vector store" → **Amazon OpenSearch Serverless**. The console will create the collection, the KB's service role, and the OpenSearch data-access policy naming that role, all in one flow — this is the main reason to use the console instead of hand-rolling it via CLI.
 5. Review and create. Then trigger an initial sync: Knowledge Bases → your KB → Data source → Sync.
 
 **The one thing to check manually if sync fails:** OpenSearch Serverless → Collections → your collection → Data access policies. Confirm the KB's service role principal is listed with index/document-level permissions on the collection and its indexes — e.g. `aoss:CreateIndex`, `aoss:DescribeIndex`, `aoss:UpdateIndex`, `aoss:ReadDocument`, `aoss:WriteDocument`. This data-access-policy grant is a separate, OpenSearch-native permissions object (not IAM) — don't confuse it with `aoss:APIAccessAll`, which is a *different* thing: an IAM identity-policy action (used in Section 1.1's custom policy) that controls whether the role can call the OpenSearch Serverless data-plane API at all. You need both: the IAM side (the role is allowed to call the API) and the data-access-policy side (the collection allows that specific role to touch its indexes/documents) — missing either one produces the same OpenSearch authorization error during sync.
 
-**Verify (console):** Knowledge Bases → your KB → "Test Knowledge Base" panel → query `service credit tenure clock` → confirm both a CBA-sourced chunk and a synthetic Handbook chunk appear in the results (this is the calibration case from `spec.md` §6 and `implementation.md` Phase 1.5).
+**Verify (console):** Knowledge Bases → your KB → "Test Knowledge Base" panel → query `service credit tenure clock` → confirm both a CBA-sourced chunk and a synthetic Handbook chunk appear in the results (this is the calibration case from `docs/archive/spec.md` §6 and `docs/archive/implementation.md` Phase 1.5).
 
 **Verify (CLI, once you have the KB ID):**
 ```
@@ -287,71 +289,34 @@ Expect a JSON response with a `retrievalResults` array containing chunk text + s
 
 ## 5. DynamoDB
 
-**Purpose:** replaces SQLite. Tables per `implementation2.md` Phase A.3 and the Notion scope's access-control/registry additions:
+**Purpose:** replaces SQLite. This section used to show a hand-rolled `PolicyAssistant-*` naming
+scheme and `aws dynamodb create-table` CLI examples — **that scheme was never built; the names
+and keys below are illustrative only, not the real table names.** The tables that actually exist
+were provisioned two other ways:
 
-| Table | Partition key | Notes |
-|---|---|---|
-| `PolicyAssistant-ConflictLog` | `id` (string) | no GSIs at demo scale — see note below |
-| `PolicyAssistant-Uploads` | `id` (string) | ingestion status, S3 key |
-| `PolicyAssistant-AccessControl` | `userId` (string), sort key `sourceType#sourceId` | `{canAdd, canEdit, grantedBy, grantedAt}` per Notion scope §"Implementation Notes" |
-| `PolicyAssistant-CatalogRegistry` | `s3Key` (string) | `{title, canonical_url, source_type, owner, section_index, last_synced, status}` — also carries the archived/active flag from the Notion scope |
+- **CDK stack** (`infra/stacks/policy_intelligence_stack.py`, `_build_dynamodb_tables`) creates
+  all 7 tables as part of `cdk deploy`. See **`infra/README.md`'s Stack Outputs table** for the
+  literal table names, partition/sort keys, and which CloudFormation output maps to which env var.
+- **DynamoDB-only path**, for when a full `cdk deploy` (OpenSearch Serverless + Bedrock KB) is too
+  slow or costly: run **`scripts/setup_dynamodb_tables.sh`**, which creates/verifies the same 7
+  tables against the current key schemas directly, and refuses to touch a table with a mismatched
+  schema rather than silently leaving one the backend can't read. Pair with
+  `scripts/verify_dynamodb_tables.sh`.
 
-**Setup (CLI):**
-```
-aws dynamodb create-table \
-  --table-name PolicyAssistant-ConflictLog \
-  --attribute-definitions AttributeName=id,AttributeType=S \
-  --key-schema AttributeName=id,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST \
-  --region us-west-2 --profile policy-assistant
+Root `CLAUDE.md`'s "DynamoDB App-Memory Merge" section is the authoritative record of the settled
+key schemas (`id`; `user_email`+`source_type`; `draft_id`+numeric `version`) if you need the
+detail without reading the CDK stack or script directly.
 
-aws dynamodb create-table \
-  --table-name PolicyAssistant-Uploads \
-  --attribute-definitions AttributeName=id,AttributeType=S \
-  --key-schema AttributeName=id,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST \
-  --region us-west-2 --profile policy-assistant
-
-aws dynamodb create-table \
-  --table-name PolicyAssistant-AccessControl \
-  --attribute-definitions AttributeName=userId,AttributeType=S AttributeName=sourceKey,AttributeType=S \
-  --key-schema AttributeName=userId,KeyType=HASH AttributeName=sourceKey,KeyType=RANGE \
-  --billing-mode PAY_PER_REQUEST \
-  --region us-west-2 --profile policy-assistant
-
-aws dynamodb create-table \
-  --table-name PolicyAssistant-CatalogRegistry \
-  --attribute-definitions AttributeName=s3Key,AttributeType=S \
-  --key-schema AttributeName=s3Key,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST \
-  --region us-west-2 --profile policy-assistant
-```
-Use on-demand (`PAY_PER_REQUEST`) billing — at hackathon-demo scale this is pennies and you don't want to think about provisioned capacity.
-
-**On the `topic`/`status` GSIs:** the `create-table` command above does not create them (a real GSI needs `--attribute-definitions` and `--global-secondary-indexes` at creation time, or a later `update-table`). At hackathon-demo scale — a handful of conflict-log rows, pre-seeded plus a few detected live — filtering by `topic` or `status` with a `Scan` and a filter expression is simpler and fast enough; there's no need for the extra table-definition complexity under demo load. If the conflict log grows past a trivial size post-hackathon, add the GSIs then with `aws dynamodb update-table --table-name PolicyAssistant-ConflictLog --attribute-definitions AttributeName=topic,AttributeType=S --global-secondary-indexes '[{"Create":{"IndexName":"topic-index","KeySchema":[{"AttributeName":"topic","KeyType":"HASH"}],"Projection":{"ProjectionType":"ALL"}}}]'`.
-
-`AccessControl` and `CatalogRegistry` are Phase-D/"later" per the Notion scope's own "Likely Needed Later" framing — create them now if time allows, but they aren't blocking the core demo path (chat, resolution checker, conflict log) that `implementation2.md` treats as never-cut.
-
-**Verify:**
+**Verify (once tables exist, either path):**
 ```
 aws dynamodb list-tables --region us-west-2 --profile policy-assistant
-```
-Expect all four table names back. Then confirm a write/read round-trips:
-```
-aws dynamodb put-item --table-name PolicyAssistant-ConflictLog \
-  --item '{"id":{"S":"test-1"},"topic":{"S":"smoke-test"}}' \
-  --region us-west-2 --profile policy-assistant
-
-aws dynamodb get-item --table-name PolicyAssistant-ConflictLog \
-  --key '{"id":{"S":"test-1"}}' \
-  --region us-west-2 --profile policy-assistant
 ```
 
 ---
 
 ## 6. Amazon Cognito — auth
 
-**Target group model:** the Notion MVP scope specifies **Admin / Reviewer-Writer / Employee** as the three role groups, driving both dashboard routing and conflict-log visibility gating. `implementation2.md`'s architecture diagram (written earlier) only names two groups, **makers / employees** — treat that as the older, coarser version of the same idea. **Use Admin / Reviewer-Writer / Employee going forward**; if code or slides still say `makers`/`employees`, that's the two-group MVP simplification and should be read as `Reviewer-Writer` ≈ `maker` and `Employee` ≈ `employee`, with `Admin` as a new top tier (source-access permission panel, source archive/activate) that wasn't in the original two-group split.
+**Target group model:** the Notion MVP scope specifies **Admin / Reviewer-Writer / Employee** as the three role groups, driving both dashboard routing and conflict-log visibility gating. `docs/archive/implementation2.md`'s architecture diagram (written earlier) only names two groups, **makers / employees** — treat that as the older, coarser version of the same idea. **Use Admin / Reviewer-Writer / Employee going forward**; if code or slides still say `makers`/`employees`, that's the two-group MVP simplification and should be read as `Reviewer-Writer` ≈ `maker` and `Employee` ≈ `employee`, with `Admin` as a new top tier (source-access permission panel, source archive/activate) that wasn't in the original two-group split.
 
 **Setup (console — Cognito's hosted-UI config has enough interlocking pieces that the console wizard is worth it over raw CLI):**
 1. Cognito console (region `us-west-2`) → User pools → Create user pool.
@@ -379,7 +344,7 @@ Expect `Reviewer-Writer` in the groups list for that user.
 
 ## 7. Lambda + API Gateway (backend)
 
-**Purpose:** hosts the FastAPI app (wrapped with Mangum per `implementation2.md` Phase B.1) behind an HTTP API with a Cognito JWT authorizer — this is what deletes the hardcoded `auth.py` accounts.
+**Purpose:** hosts the FastAPI app (wrapped with Mangum per `docs/archive/implementation2.md` Phase B.1) behind an HTTP API with a Cognito JWT authorizer — this is what deletes the hardcoded `auth.py` accounts.
 
 **Lambda execution role (create first):**
 ```
@@ -496,7 +461,7 @@ Then open the app's default domain in a browser and confirm the Cognito hosted U
    | Misconduct | MEDIUM | LOW | Output discusses misconduct policy constantly |
 
 3. Prompt attacks: set to **HIGH** (input only — this one has no "loose output" side, jailbreak attempts should always be blocked).
-4. Contextual grounding check: enable, with high grounding and relevance thresholds — this is the anti-hallucination backstop tying the guardrail to the same "answers must be grounded in retrieved chunks" requirement already in the chat prompt contract (`implementation.md` Phase 2.3).
+4. Contextual grounding check: enable, with high grounding and relevance thresholds — this is the anti-hallucination backstop tying the guardrail to the same "answers must be grounded in retrieved chunks" requirement already in the chat prompt contract (`docs/archive/implementation.md` Phase 2.3).
 5. Sensitive information filters: enable PII masking, but configure it to **preserve citations** — mask personal PII (names, SSNs, emails) in generated prose while leaving source/section reference tokens (e.g. "CBA Article 12.3") untouched, since those aren't PII and are load-bearing for the product's core promise of cited answers.
 6. Denied topics — add all eight, each with the shared blocked-message tone ("I can help you find and understand existing policy, but I can't help with that…"):
    - Legal Advice & Interpretation
@@ -509,7 +474,7 @@ Then open the app's default domain in a browser and confirm the Cognito hosted U
    - Opinions & Endorsements
 7. Create a version once configured. Guardrails are draft-then-versioned, but the `DRAFT` version is itself attachable to a model invocation for iteration/testing — you don't strictly need a published numbered version to start wiring it in; publish a numbered version once you're happy with it so you have a stable, immutable reference for the actual demo (rather than a `DRAFT` that could change under you).
 
-**Validation approach (from the Notion scope):** run one deliberately-worded query per content-filter category plus the ~10 calibration questions from `spec.md`/the Notion scope §7. If a legitimate policy question gets blocked, lower that category's **output** strength one notch and retest — don't touch input strength, since the goal is to keep the door strict on the way in and permissive on the way out once grounded in real policy text.
+**Validation approach (from the Notion scope):** run one deliberately-worded query per content-filter category plus the ~10 calibration questions from `docs/archive/spec.md`/the Notion scope §7. If a legitimate policy question gets blocked, lower that category's **output** strength one notch and retest — don't touch input strength, since the goal is to keep the door strict on the way in and permissive on the way out once grounded in real policy text.
 
 **Wiring in:** the request shape differs by API, so don't assume one shared field name. The **Converse API** takes a nested `guardrailConfig` object: `{"guardrailConfig": {"guardrailIdentifier": "<id>", "guardrailVersion": "<version-or-DRAFT>", "trace": "enabled"}}`. The lower-level **InvokeModel API** takes `guardrailIdentifier` and `guardrailVersion` as separate top-level request parameters, not nested. Whichever call `llm.py` (or its Lambda equivalent) uses, match that shape exactly. This also needs one IAM permission beyond plain `bedrock:InvokeModel`: add `bedrock:ApplyGuardrail` to the Lambda execution role's inline policy (Section 1.3, chain 1) — without it, guardrail-attached invocations fail even though ungated `InvokeModel` calls succeed. Also confirm your IAM policy doesn't scope `Resource` down to a specific model ARN in a way that excludes the guardrail resource type.
 
@@ -566,7 +531,7 @@ Its only AWS-facing requirement is that the Lambda execution role it runs under 
 
 ---
 
-## 12. Phase mapping (implementation2.md Phase A–D → this doc)
+## 12. Phase mapping (docs/archive/implementation2.md Phase A–D → this doc)
 
 | Phase | What it needs from this doc |
 |---|---|

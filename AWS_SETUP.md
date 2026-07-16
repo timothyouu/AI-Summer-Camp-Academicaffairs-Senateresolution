@@ -2,7 +2,10 @@
 
 Everything on branch `prod` runs locally today with zero AWS. This file is the
 complete, ordered list of manual steps that turn on the real architecture from
-`implementation2.md`. Nothing else is required — no code changes.
+`docs/archive/implementation2.md`. Nothing else is required — no code changes.
+
+See also `implementation-aws.md` (AWS account/access onboarding) and
+`infra/README.md` (CDK stack internals and Stack Outputs table).
 
 ## 0. One-time installs (hook-blocked for Claude; run these yourself)
 
@@ -49,7 +52,7 @@ spin up just to exercise persistence:
 If setup reports a key-schema mismatch, that table is left over from the
 app-memory round and the backend cannot read it — the script prints the scan and
 delete commands rather than changing anything itself. See the integration note in
-`Yaza_DynamoDB_Work_Summary.md`.
+`docs/archive/Yaza_DynamoDB_Work_Summary.md`.
 
 ```bash
 source backend/.venv/bin/activate

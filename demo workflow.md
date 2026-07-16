@@ -1,5 +1,10 @@
 # Demo Workflow
 
+> **Note:** this frame map predates the 2026-07-14 sidebar unification (single 96px icon rail,
+> role persisted via RoleProvider) — root `CLAUDE.md` supersedes it where they conflict. The
+> page-to-page transitions and demo-path scripts below remain the navigation-transition
+> reference.
+
 This document maps how the website frames connect. Each transition uses the exact frame names.
 
 ## Entry and Workspace Selection
