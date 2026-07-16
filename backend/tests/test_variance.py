@@ -188,6 +188,47 @@ def test_detect_variance_abstains_without_enough_claims() -> None:
     assert report.items == []
 
 
+def test_normal_informational_question_reports_no_variance() -> None:
+    # Regression for the reported 500 / false positive on a no-variance prompt:
+    # "What is the purpose of the University Handbook?" A live model extracts one
+    # benign `may` claim from the Handbook; a second source merely has a passage
+    # under the same coarse topic but no comparable claim. With < 2 grounded
+    # claims this must NOT surface variance, must NOT log, and must NOT add soft
+    # language — the answer stays a normal informational answer.
+    only_claim = _claim(
+        "CSUB University_Handbook_2025",
+        "The Handbook may be amended by the Academic Senate.",
+        "may",
+        topic="senate procedures",
+        section="Preface",
+    )
+    result = PipelineResult(
+        passages=[
+            GroundedPassage(text=only_claim.citation_span, span=only_claim.citation_span, source="CSUB University_Handbook_2025", section="Preface", doc_type="handbook", topic="senate procedures"),
+            GroundedPassage(text="The Agreement governs labor relations terms.", span="The Agreement governs labor relations terms.", source="Unit 3 CBA 2022-2026", section="1", doc_type="cba", topic="senate procedures"),
+        ],
+        claims=[only_claim],
+    )
+    store = MemoryStore()
+    report = detect_variance("What is the purpose of the University Handbook?", result)
+    assert not report.variance_detected
+    assert report.items == []
+    assert report.soft_summary == ""
+    assert report.escalation == ""
+
+    # No variance event is logged.
+    assert log_variance(report, store=store) == []
+    assert store.created == []
+
+    # The chat response builder returns a normal answer with no conflict object
+    # and no soft variance language.
+    response = _agent_grounded_answer(result, "What is the purpose of the University Handbook?", store=store)
+    assert response.conflict is None
+    assert SOFT_SUMMARY not in response.answer
+    assert VARIANCE_ESCALATION not in response.answer
+    assert store.created == []
+
+
 def test_detect_variance_ignores_same_source_pair() -> None:
     first = _claim("Handbook", "Faculty may take one semester of leave.", "may", topic="leave")
     second = _claim("Handbook", "Faculty must request leave in writing.", "must", topic="leave")
@@ -203,13 +244,19 @@ def test_detect_variance_ignores_same_source_pair() -> None:
 
 
 def test_detect_variance_surfaces_guarded_omission() -> None:
+    # The customer's headline case: the Handbook grants a three-month extension
+    # on the WPAF-timeline topic; the CBA is a second grounded source (it has a
+    # claim elsewhere) but is silent on that topic. Two grounded claims from two
+    # sources satisfy the guardrail, and the silence surfaces as an omission.
     grant = _claim("Faculty Handbook", "Faculty may request up to three months of additional time.", "may", topic="WPAF timeline", value_threshold="three months")
+    elsewhere = _claim("Unit 3 CBA", "Sabbatical eligibility requires six years of service.", "must", topic="leave", section="9")
     result = PipelineResult(
         passages=[
             GroundedPassage(text=grant.citation_span, span=grant.citation_span, source="Faculty Handbook", section="App D", doc_type="handbook", topic="WPAF timeline"),
             GroundedPassage(text="The WPAF submission window closes on the posted date.", span="The WPAF submission window closes on the posted date.", source="Unit 3 CBA", section="15", doc_type="cba", topic="WPAF timeline"),
+            GroundedPassage(text=elsewhere.citation_span, span=elsewhere.citation_span, source="Unit 3 CBA", section="9", doc_type="cba", topic="leave"),
         ],
-        claims=[grant],
+        claims=[grant, elsewhere],
     )
     report = detect_variance("Do I get extra time for my WPAF?", result)
     assert report.variance_detected

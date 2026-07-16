@@ -274,6 +274,17 @@ def detect_variance(question: str, result: PipelineResult) -> VarianceReport:
     Same-source pairs are ignored; nothing unverified is invented.
     """
     index = _passage_index(result)
+
+    # Abstain unless at least two grounded claims from two distinct sources are
+    # available to compare (lambdaspec.md §7 anti-false-positive guardrail:
+    # "Abstain when < 2 grounded same-topic claims"). Without this, a single
+    # benign `may` claim plus any unrelated passage under the same coarse topic
+    # manufactures a false variance for normal informational questions — and the
+    # claimless downstream path is what fails live. A normal question yields no
+    # variance, no log write, and no soft language.
+    if len({claim.source for claim in result.claims}) < 2:
+        return VarianceReport(question=question, variance_detected=False)
+
     items: list[VarianceItem] = []
     seen: set[tuple[str, str, str]] = set()
 
