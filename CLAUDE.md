@@ -1,7 +1,14 @@
 # Project: Policy Intelligence Assistant (AI Summer Camp — Academic Affairs / Senate Resolution)
 
 ## Purpose
-Hackathon customer solution for a university (CSUB): a policy search assistant with two role paths — employees ask a chatbot policy questions and get cited, conflict-aware answers; policy makers/reviewers check draft resolutions for overlap/duplicates/conflicts and review a conflict log. See `spec.md` (what/why) and `implementation.md` (how). Customer demo 2026-07-15; hackathon deadline Friday 7AM.
+Hackathon customer solution for a university (CSUB): a policy search assistant with two role paths — employees ask a chatbot policy questions and get cited, conflict-aware answers; policy makers/reviewers check draft resolutions for overlap/duplicates/conflicts and review a conflict log. See `spec.md` (what/why) and `implementation.md` (how). **Customer demo was pitched 2026-07-15 — done.** Remaining deadline: hackathon Friday 7AM, presented on the real AWS architecture (implementation2.md §1).
+
+## Deployment Posture (decided 2026-07-15, after the customer pitch)
+Target is **AWS-real, not local**. Per Tim: "I want most of it to not be local. One of the few things that are local will just be purely the sign in, and anything within Notion that I did not list."
+- **On AWS** (Notion §9 Core Services): DynamoDB (conflict log, uploads, registry, permissions, drafts, feedback, recurring questions), S3 corpus bucket, Bedrock KB + Titan/Claude, API Gateway + Lambda, Strands agents.
+- **Stays local**: sign-in only — hardcoded demo accounts in `auth.py`. Cognito stays OFF (matches implementation3.md's "Cognito stays OFF for the demo"), even though Notion §9 lists it as core. This is a deliberate override.
+- The code is AWS-ready today; going non-local is *deployment config*, not a code change. Every integration is gated on its own env var, so nothing flips until a table/bucket is named. See `AWS_SETUP.md` for the ordered steps.
+- Decision authority when docs disagree: the **Notion PRD governs what exists** (features, fields); **implementation*.md governs how it is built** (keys, wiring). Settled by council 2026-07-15 — see `~/COUNCIL.md` log.
 
 ## Stack
 - Frontend: React (Vite, TypeScript strict) + Tailwind CSS
@@ -25,7 +32,7 @@ Hackathon customer solution for a university (CSUB): a policy search assistant w
 - Conflict display decision: contextual flagging in chat + everything accumulates in the maker conflict log.
 
 ## Active Constraints
-- No AWS credentials configured on this machine yet (Phase 0 blocker — Tim must run aws configure/login and verify Bedrock model access).
+- No AWS credentials configured on this WSL machine yet (Phase 0 blocker — Tim must run aws configure/login and verify Bedrock model access). `aws` CLI v2.35 is installed but `aws configure list-profiles` returns nothing; the `csub-policy` profile used to provision the app-memory tables lives on Yaza's machine, so **no live-AWS verification has been run from this repo**.
 - Handbook PDF not yet in `data/corpus/`; CBA source: `/mnt/c/Users/timot/Downloads/Unit 3 CBA 2022-2026.pdf`.
 - Demo honesty: synthetic data disclosed to customer; no fabricated "real" sources.
 
@@ -60,8 +67,20 @@ Planned (not yet installed — needs Tim's approval): fastapi, uvicorn, boto3, p
 - Dark mode uses CSS variables, defaults to light, persists in localStorage, and is controlled from the sidebar gear's settings popover. Shared back buttons are wired, and the sidebar emblem navigates to `/login`.
 - AWS round-2 resources are independently env-gated with `DDB_REGISTRY_TABLE`, `DDB_PERMISSIONS_TABLE`, and `DDB_DRAFTS_TABLE`. Cognito stays optional and OFF for the demo unless both backend `COGNITO_*` values and frontend `VITE_USE_COGNITO` settings are enabled.
 
+## DynamoDB App-Memory Merge (2026-07-15)
+`integration/yaza-dynamodb-app-memory` (Yaza Myo Tun's work, originally branched off `demo`) is merged into `prod` as a real merge commit — his commits are in the history, not squashed. Verifier is now **105 backend tests** (was 87) + `cd frontend && npx tsc --noEmit && npm run build`.
+- **New from that branch:** answer feedback (`backend/app/feedback.py`, `POST/GET /api/feedback`, wired-up thumbs in `ChatAnswer.tsx` — previously dead UI), recurring questions (`backend/app/recurring_questions.py`, `GET /api/recurring-questions`, chat `answer_id`), `backend/app/dynamodb_client.py` (boto3 *resource* API — required because feedback/recurring records hold lists that `_ddb_encode` cannot represent), and `scripts/setup_dynamodb_tables.sh` / `verify_dynamodb_tables.sh`. These cover the Notion Should-Have items "Answer feedback" and "Recurring questions hub".
+- **Schema conflict resolved toward prod.** Both sides built conflicts/registry/permissions/drafts with incompatible keys. Prod's won (`id`; `user_email`+`source_type`; `draft_id`+numeric `version`) because those APIs and tests already worked and the AWS tables held no data. The scripts were retargeted; `policy-intelligence-uploads` added (the app-memory set lacked it).
+- **One config system.** Per-table `DDB_*_TABLE` gating only. `PersistenceSettings` / `load_persistence_settings` / `StoreFactory` / `APP_ENV` / `APP_PERSISTENCE_BACKEND` are **deleted — do not reintroduce**. Yaza's `DYNAMODB_*` names survive as aliases in `get_settings()` (`DYNAMODB_SOURCE_REGISTRY_TABLE`→registry, `DYNAMODB_ACCESS_CONTROL_TABLE`→permissions, `DYNAMODB_DRAFT_VERSIONS_TABLE`→drafts) so his runbook still works.
+- **CDK creates all 7 tables** (`_build_dynamodb_tables`); it does not import script-provisioned ones, because CloudFormation cannot adopt them. `setup_dynamodb_tables.sh` is the DynamoDB-only path for when a full `cdk deploy` (OpenSearch Serverless + Bedrock KB) is too slow/costly; it verifies key schemas and refuses to touch a mismatched table rather than silently leaving one the backend cannot read.
+- **Two latent bugs fixed:** `_timestamp` couldn't parse Pydantic's trailing `Z` (`datetime.fromisoformat` only accepts it on 3.11+; this venv is 3.10), and `_ddb_encode` emitted `{"N": "True"}` for booleans since `bool` subclasses `int`. Both only fire against real DynamoDB.
+- Chat logs the recurring question **before** `shape_response_for_role`, so aggregates are role-independent.
+- Stale doc warning: `Yaza_DynamoDB_Work_Summary.md` §3/§4/§7/§10/§11 describe the pre-merge design. Its top integration note is current; the body is kept as his build record.
+
 ## Last Updated
-2026-07-15 — PRD round-2 implementation documented, including source lifecycle and permissions UI, shared resource catalog, drafting assistant, live current/archive catalog smoke results, dark-mode/navigation, and AWS infrastructure.
+2026-07-15 (evening) — Merged Yaza's DynamoDB app-memory branch into prod (feedback + recurring questions added; prod key schemas kept; single DDB_* config system; two AWS-only bugs fixed). Recorded post-pitch AWS-first deployment posture. See the DynamoDB App-Memory Merge section.
+
+Previous: 2026-07-15 — PRD round-2 implementation documented, including source lifecycle and permissions UI, shared resource catalog, drafting assistant, live current/archive catalog smoke results, dark-mode/navigation, and AWS infrastructure.
 
 2026-07-14 (evening) — Sidebar unified to one icon rail with persisted role + Library→Search chats (see Sidebar Unification section); verified via tsc, vite build, and Playwright click-through of both roles.
 
