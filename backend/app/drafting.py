@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends
 
-from .agents import create_pipeline, resolution_output
+from .agents import LLM, create_pipeline, resolution_output
 from .auth import require_reviewer
 from .dynamodb_client import get_dynamodb_client
 from .config import get_settings
@@ -143,10 +143,8 @@ def deterministic_revision(
 
 
 def llm_revision(
-    text: str, conflicts: list[ResolutionFinding], recommendation: str
+    llm: LLM, text: str, conflicts: list[ResolutionFinding], recommendation: str
 ) -> tuple[str, str]:
-    from .llm import generate
-
     system = (
         "You revise draft university policy resolutions. Rewrite the draft so it no longer contradicts "
         "the cited existing policies, changing as little as possible. Return JSON only: "
@@ -160,7 +158,7 @@ def llm_revision(
             "recommendation": recommendation,
         }
     )
-    raw = generate(system, user, json_mode=True)
+    raw = llm.generate(system, user, json_mode=True)
     parsed = json.loads(raw)
     revised, rationale = str(parsed["revised_text"]), str(parsed["rationale"])
     if not revised.strip() or not rationale.strip():
@@ -181,7 +179,9 @@ def revise_draft(
         for item in output.conflicts
     ]
     try:
-        revised, rationale = llm_revision(payload.text, conflicts, output.recommendation)
+        revised, rationale = llm_revision(
+            pipeline.llm, payload.text, conflicts, output.recommendation
+        )
     except Exception:
         revised, rationale = deterministic_revision(payload.text, conflicts, output.recommendation)
     version = draft_store().add_version(draft_id, payload.text, rationale)

@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi.testclient import TestClient
 
-from backend.app.drafting import DynamoDBDraftStore, deterministic_revision, draft_store
+from backend.app import drafting
+from backend.app.drafting import (
+    DynamoDBDraftStore,
+    deterministic_revision,
+    draft_store,
+    llm_revision,
+    revise_draft,
+)
 from backend.app.main import app
-from backend.app.models import ResolutionFinding
+from backend.app.models import DraftReviseRequest, DraftVersion, ResolutionFinding
 
 
 def test_version_numbers_increment_per_draft() -> None:
@@ -33,6 +42,79 @@ def test_deterministic_revision_cites_findings() -> None:
     )
     assert "RES 252644" in rationale
     assert revised
+
+
+def test_llm_revision_uses_selected_pipeline_llm() -> None:
+    class FakeLLM:
+        def generate(self, system: str, user: str, json_mode: bool = False) -> str:
+            assert "Return JSON only" in system
+            assert json.loads(user)["draft"] == "Original draft."
+            assert json_mode is True
+            return json.dumps(
+                {
+                    "revised_text": "Revision produced by Bedrock.",
+                    "rationale": "Bedrock rationale citing RES 252644.",
+                }
+            )
+
+    revised, rationale = llm_revision(
+        FakeLLM(),
+        "Original draft.",
+        [
+            ResolutionFinding(
+                source="RES 252644",
+                section="WPAF",
+                description="Electronic evidence replaces binders.",
+            )
+        ],
+        "Replace the physical binder limit.",
+    )
+
+    assert revised == "Revision produced by Bedrock."
+    assert rationale == "Bedrock rationale citing RES 252644."
+
+
+def test_revise_draft_falls_back_when_selected_llm_raises(monkeypatch: Any) -> None:
+    conflict = ResolutionFinding(
+        source="RES 252644",
+        section="WPAF",
+        description="Electronic evidence replaces binders.",
+    )
+
+    class RaisingLLM:
+        def generate(self, system: str, user: str, json_mode: bool = False) -> str:
+            raise RuntimeError("Local LLM seam")
+
+    class FakePipeline:
+        def __init__(self) -> None:
+            self.llm = RaisingLLM()
+
+        def run(self, topic: str, *, draft: bool = False) -> SimpleNamespace:
+            return SimpleNamespace(agent_trace=[])
+
+    class FakeStore:
+        def add_version(self, draft_id: str, text: str, suggestion: str) -> DraftVersion:
+            return DraftVersion(
+                draft_id=draft_id,
+                version=1,
+                text=text,
+                suggestion=suggestion,
+                created_at=datetime.now(timezone.utc),
+            )
+
+    def fake_resolution_output(_result: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            conflicts=[conflict], overlaps=[], duplicates=[], recommendation="Revise it."
+        )
+
+    monkeypatch.setattr(drafting, "create_pipeline", FakePipeline)
+    monkeypatch.setattr(drafting, "resolution_output", fake_resolution_output)
+    monkeypatch.setattr(drafting, "draft_store", FakeStore)
+
+    response = revise_draft(DraftReviseRequest(text="Original draft."), None)
+
+    assert "RES 252644" in response.rationale
+    assert "Revision note" in response.revised_text
 
 
 def test_revise_endpoint_persists_versions() -> None:
