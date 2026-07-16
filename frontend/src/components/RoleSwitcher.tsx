@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { setDemoIdentity } from "../api";
 import { signOutCognito } from "../auth/cognito";
 import { useRole } from "../state/role";
 
@@ -14,6 +15,7 @@ export default function RoleSwitcher() {
 
   const changeRole = (nextRole: "employee" | "reviewer") => {
     setRole(nextRole);
+    setDemoIdentity(nextRole);
     setOpen(false);
     navigate(nextRole === "employee" ? "/chats" : "/reviews");
   };

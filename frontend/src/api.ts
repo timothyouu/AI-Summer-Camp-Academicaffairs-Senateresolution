@@ -125,6 +125,22 @@ interface BackendDraftRevision {
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const AGENT_REQUEST_TIMEOUT_MS = 120_000;
 
+const DEMO_EMAIL_STORAGE_KEY = "policy-intelligence.user-email";
+
+export const demoEmailForRole = (role: Role): string =>
+  role === "reviewer" ? "reviewer@campus.edu" : "employee@campus.edu";
+
+/** Keep the demo identity in step with the selected role.
+ *
+ * The backend resolves the demo role from X-User-Email in preference to
+ * X-Role, so a role change that left the stored email behind would send a
+ * reviewer view with an employee identity and 403 every reviewer-only route.
+ */
+export function setDemoIdentity(role: Role): void {
+  if (import.meta.env.VITE_USE_COGNITO === "true") return;
+  window.localStorage.setItem(DEMO_EMAIL_STORAGE_KEY, demoEmailForRole(role));
+}
+
 const backendRequest = async <T>(path: string, init?: RequestInit, timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS, baseUrl: string = apiBaseUrl): Promise<T | null> => {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -132,7 +148,7 @@ const backendRequest = async <T>(path: string, init?: RequestInit, timeoutMs: nu
     const authorizationToken = await getCognitoAuthorizationToken();
     const headers = new Headers(init?.headers);
     if (authorizationToken !== null) headers.set("Authorization", `Bearer ${authorizationToken}`);
-    const demoEmail = window.localStorage.getItem("policy-intelligence.user-email");
+    const demoEmail = window.localStorage.getItem(DEMO_EMAIL_STORAGE_KEY);
     if (authorizationToken === null && demoEmail !== null) headers.set("X-User-Email", demoEmail);
     const response = await fetch(`${baseUrl}${path}`, { ...init, headers, signal: controller.signal });
     if (!response.ok) return null;
@@ -203,18 +219,18 @@ export async function login(role: Role): Promise<LoginResult> {
   if (import.meta.env.VITE_USE_COGNITO === "true") {
     throw new Error("Demo login is unavailable while Cognito sign-in is enabled.");
   }
-  const email = role === "reviewer" ? "reviewer@campus.edu" : "employee@campus.edu";
+  const email = demoEmailForRole(role);
   const result = await backendRequest<LoginResult>("/api/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password: "demo123" }),
   });
   if (result !== null) {
-    window.localStorage.setItem("policy-intelligence.user-email", email);
+    setDemoIdentity(role);
     return result;
   }
   await delay();
-  window.localStorage.setItem("policy-intelligence.user-email", email);
+  setDemoIdentity(role);
   return { role, name: role === "reviewer" ? "Jennifer D." : "Alex B." };
 }
 
