@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, Header
 
-from .agents import GroundedPassage, PipelineResult, create_pipeline
+from .agents import LLM, GroundedPassage, PipelineResult, create_pipeline
 from .agents.pipeline import ESCALATION
+from .agents.schemas import Claim
 from .agents.variance import detect_variance, log_variance, soft_language
 from .auth import request_role, require_authenticated
 from .conflicts import create_or_get_conflict
@@ -67,7 +69,7 @@ class CalibratedAnswer:
 CALIBRATED_ANSWERS: tuple[CalibratedAnswer, ...] = (
     CalibratedAnswer(
         ("service credit", "tenure clock", "prior service"),
-        "The supplied CSUB University Handbook section 304.4.1 and Unit 3 CBA Article 13.4 align: each permits up to two years of prior-service credit. Credit is not automatic; confirm the written appointment record with Faculty Affairs before calculating a tenure-review date.",
+        "You can receive up to two years of prior-service credit toward the tenure clock. It isn't automatic, so check your written appointment record with Faculty Affairs before you count on it when figuring out your tenure-review date.",
         (
             ("CSUB University Handbook 2025", "Section 304.4.1", "A candidate may request up to two years of credit toward tenure for previous service."),
             ("Unit 3 Collective Bargaining Agreement", "Article 13.4", "The President may grant up to two years of probationary service credit based on qualifying prior experience."),
@@ -133,8 +135,54 @@ def _citations(values: tuple[tuple[str, str, str], ...]) -> list[Citation]:
     return [Citation(id=index, source=source, section=section, excerpt=excerpt) for index, (source, section, excerpt) in enumerate(values, start=1)]
 
 
-def _local_index_answer(results: list[SearchResult]) -> ChatResponse:
-    pipeline_result = create_pipeline().run(
+# Answer-first synthesis: lead with a plain, human answer grounded strictly in
+# the supplied policy text, then let the citations carry attribution. When no
+# variance is detected the answer never mentions that sources could differ; the
+# comparison is surfaced only when a variance is actually present.
+_SYNTHESIS_SYSTEM = (
+    "You are a friendly campus policy assistant. Answer the employee's question directly and "
+    "conversationally in 1-3 sentences, using only the supplied policy passages — never invent "
+    "facts, numbers, or sources. Lead with the answer itself; do not narrate your process, do not "
+    "say 'the sources say' or 'the documents state', and do not name the source documents in the "
+    "sentence (a separate citations list handles attribution). If the passages do not answer the "
+    "question, say so plainly and suggest who to ask. Return JSON only: {\"answer\": string}."
+)
+
+
+def _synthesize_answer(llm: LLM, question: str, snippets: list[dict[str, str]]) -> str:
+    """Ask the pipeline's LLM for a conversational, grounded answer.
+
+    Raises on any failure (unconfigured provider, malformed JSON, empty text) so
+    callers fall back to the deterministic builder.
+    """
+    raw = llm.generate(_SYNTHESIS_SYSTEM, json.dumps({"question": question, "passages": snippets}), json_mode=True)
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise ValueError("Synthesis response was not a JSON object")
+    answer = str(parsed.get("answer", "")).strip()
+    if not answer:
+        raise ValueError("Synthesis produced an empty answer")
+    return answer
+
+
+def _deterministic_claim_answer(claims: list[Claim]) -> str:
+    """LLM-free fallback: state the grounded policy text plainly, answer-first.
+
+    No comparison framing and no "sources agree/differ" language — variance, when
+    present, is appended separately by the caller.
+    """
+    statements = [claim.citation_span.strip() for claim in claims if claim.source != "Submitted draft"]
+    if not statements:
+        return (
+            "I couldn't find that in the current policy sources. Your dean or the Provost's "
+            "office can point you to the right guidance."
+        )
+    return " ".join(statements)
+
+
+def _local_index_answer(question: str, results: list[SearchResult]) -> ChatResponse:
+    pipeline = create_pipeline()
+    pipeline_result = pipeline.run(
         " ".join(result.topic for result in results[:3]) or "policy question",
         passages=[GroundedPassage(
             text=result.text, span=result.text, source=result.source, section=result.section,
@@ -144,19 +192,26 @@ def _local_index_answer(results: list[SearchResult]) -> ChatResponse:
     )
     if not results:
         return ChatResponse(
-            answer="The local policy index is empty or has no matching passages. Build the index or ask one of the calibrated demo questions.",
+            answer="I couldn't find anything on that in the current policy sources. Your dean or the Provost's office can help point you to the right place.",
             citations=[],
             mode="local-index",
             agent_trace=pipeline_result.agent_trace,
         )
     selected = results[:3]
-    summary = " ".join(result.text[:360].strip() for result in selected)
     citations = [Citation(
         id=index, source=result.source, section=result.section, excerpt=result.text[:280],
         canonical_url=result.canonical_url, section_url=result.section_url,
     ) for index, result in enumerate(selected, start=1)]
+    try:
+        answer = _synthesize_answer(
+            pipeline.llm, question,
+            [{"text": result.text[:600], "source": result.source, "section": result.section} for result in selected],
+        )
+    except Exception:
+        # LLM-free fallback: lead with the most relevant grounded passage text.
+        answer = " ".join(result.text[:360].strip() for result in selected)
     return ChatResponse(
-        answer=f"The most relevant supplied policy passages state: {summary}",
+        answer=answer,
         citations=citations,
         mode="local-index",
         agent_trace=pipeline_result.agent_trace,
@@ -165,8 +220,9 @@ def _local_index_answer(results: list[SearchResult]) -> ChatResponse:
 
 def _agent_grounded_answer(
     result: PipelineResult, question: str, store: ConflictStore | None = None,
+    llm: LLM | None = None,
 ) -> ChatResponse:
-    claims = result.claims[:6]
+    claims = [claim for claim in result.claims[:6] if claim.source != "Submitted draft"]
     passage_links = {
         (passage.source, passage.section): (passage.canonical_url, passage.section_url)
         for passage in result.passages
@@ -178,19 +234,26 @@ def _agent_grounded_answer(
             section_url=passage_links.get((claim.source, claim.section), ("", ""))[1],
         )
         for index, claim in enumerate(claims, start=1)
-        if claim.source != "Submitted draft"
     ]
-    if claims:
-        statements = "\n\n".join(
-            f"{claim.citation_span} ({claim.source}, {claim.section})"
-            for claim in claims if claim.source != "Submitted draft"
-        )
-        answer = f"The agent pipeline verified these grounded policy statements:\n\n{statements}"
-    else:
-        answer = "The agent pipeline could not extract a grounded policy claim from the retrieved passages, so it abstained."
+
+    # Answer-first: a conversational answer grounded in the verified claims, with
+    # a deterministic fallback when no generative provider is available.
+    answer = ""
+    if llm is not None and claims:
+        try:
+            answer = _synthesize_answer(
+                llm, question,
+                [{"text": claim.citation_span, "source": claim.source, "section": claim.section} for claim in claims],
+            )
+        except Exception:
+            answer = ""
+    if not answer:
+        answer = _deterministic_claim_answer(claims)
 
     # Re-label the pipeline's verified output with soft "policy variance"
-    # language (lambdaspec.md §7-9). The pipeline itself is unchanged.
+    # language (lambdaspec.md §7-9). The pipeline itself is unchanged. This is the
+    # only place the answer acknowledges that sources can differ, and only when a
+    # variance is actually detected — a clean answer never raises the possibility.
     report = detect_variance(question, result)
     signal: ConflictSignal | None = None
     if report.variance_detected:
@@ -258,13 +321,13 @@ def chat(
     role = resolve_request_role(authorization, x_role)
     pipeline = create_pipeline()
     if pipeline.authoritative:
-        response = _agent_grounded_answer(pipeline.run(payload.question), payload.question)
+        response = _agent_grounded_answer(pipeline.run(payload.question), payload.question, llm=getattr(pipeline, "llm", None))
     else:
         fixture = _calibrated(payload.question)
         if fixture is None:
             # Wide k so both sides of a divergence enter the same result set;
             # a narrow top-k surfaces one source and misses variance (lambdaspec.md §6-7).
-            response = _local_index_answer(search(payload.question, k=12))
+            response = _local_index_answer(payload.question, search(payload.question, k=12))
         else:
             pipeline_result = pipeline.run(
                 payload.question,

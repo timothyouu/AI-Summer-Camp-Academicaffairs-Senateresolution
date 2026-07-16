@@ -229,6 +229,85 @@ def test_normal_informational_question_reports_no_variance() -> None:
     assert store.created == []
 
 
+# --- customer-friendly answer shaping ----------------------------------------
+
+
+class _StubLLM:
+    """Stands in for a live Bedrock model that returns a conversational answer."""
+
+    def __init__(self, answer: str) -> None:
+        self.answer = answer
+        self.prompts: list[str] = []
+
+    def generate(self, system: str, user: str, json_mode: bool = False) -> str:
+        import json
+
+        self.prompts.append(system)
+        return json.dumps({"answer": self.answer})
+
+
+def test_no_variance_answer_is_answer_first_and_never_hedges_about_sources() -> None:
+    # A clean, single-source informational answer must (a) lead with the human
+    # answer synthesized by the live model and (b) never suggest that sources
+    # could differ — end users expect consistency, so a no-variance reply does
+    # not raise the possibility of a discrepancy at all.
+    only_claim = _claim(
+        "CSUB University_Handbook_2025",
+        "The Handbook may be amended by the Academic Senate.",
+        "may",
+        topic="senate procedures",
+        section="Preface",
+    )
+    result = PipelineResult(
+        passages=[GroundedPassage(text=only_claim.citation_span, span=only_claim.citation_span, source="CSUB University_Handbook_2025", section="Preface", doc_type="handbook", topic="senate procedures")],
+        claims=[only_claim],
+    )
+    llm = _StubLLM("The University Handbook sets out CSUB's academic policies and may be amended by the Academic Senate.")
+    response = _agent_grounded_answer(result, "What is the purpose of the University Handbook?", store=MemoryStore(), llm=llm)
+
+    assert response.conflict is None
+    assert response.answer.startswith("The University Handbook sets out")
+    # No hedging about agreement/variance/comparison on a clean answer.
+    for hedge in (SOFT_SUMMARY, VARIANCE_ESCALATION, "vary", "differ", "conflict", "align", "another source"):
+        assert hedge.lower() not in response.answer.lower()
+    # The answer body does not narrate the pipeline or lead with attribution.
+    assert "agent pipeline" not in response.answer.lower()
+
+
+def test_no_variance_answer_falls_back_to_grounded_text_without_llm() -> None:
+    # With no generative provider (local mode), the answer still leads with the
+    # grounded policy text — never a robotic "the pipeline verified" preamble —
+    # and still says nothing about sources differing.
+    only_claim = _claim(
+        "CSUB University_Handbook_2025",
+        "Faculty may request a leave of absence for family care.",
+        "may",
+        topic="leave",
+        section="12",
+    )
+    result = PipelineResult(
+        passages=[GroundedPassage(text=only_claim.citation_span, span=only_claim.citation_span, source="CSUB University_Handbook_2025", section="12", doc_type="handbook", topic="leave")],
+        claims=[only_claim],
+    )
+    response = _agent_grounded_answer(result, "Can I take leave for family care?", store=MemoryStore(), llm=None)
+    assert response.answer == "Faculty may request a leave of absence for family care."
+    assert "agent pipeline" not in response.answer.lower()
+    assert SOFT_SUMMARY not in response.answer
+
+
+def test_variance_answer_keeps_soft_summary_and_contact_guidance() -> None:
+    # When a variance IS present, the reply stays soft, acknowledges the nuance,
+    # and tells the user who to contact — the synthesized answer still comes
+    # first, followed by the soft summary and escalation.
+    llm = _StubLLM("Prior service credit toward tenure is handled differently across the applicable sources.")
+    response = _agent_grounded_answer(_accepted_result(), "Does service credit count?", store=MemoryStore(), llm=llm)
+    assert response.conflict is not None and response.conflict.detected
+    assert response.answer.startswith("Prior service credit toward tenure")
+    assert SOFT_SUMMARY in response.answer
+    assert VARIANCE_ESCALATION in response.answer
+    assert "consult your dean" in response.answer
+
+
 def test_detect_variance_ignores_same_source_pair() -> None:
     first = _claim("Handbook", "Faculty may take one semester of leave.", "may", topic="leave")
     second = _claim("Handbook", "Faculty must request leave in writing.", "must", topic="leave")
