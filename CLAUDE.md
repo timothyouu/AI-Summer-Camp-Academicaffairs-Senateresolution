@@ -152,7 +152,9 @@ for S3, Bedrock model access/Knowledge Bases/OpenSearch Serverless/Guardrails, D
 Lambda + API Gateway, Amplify, EventBridge). It's onboarding-oriented (get a new teammate to
 working AWS access); `AWS_SETUP.md` remains the canonical ordered deploy runbook for this repo's
 own stack — the two overlap by design and should be reconciled or merged later rather than treated
-as duplicates.
+as duplicates. Committed and pushed directly to `prod` (`8c256fb`) rather than merged — the same
+doc was independently committed and pushed to `demo` (`97afef6`, then `5512dd2` for this note);
+`prod`'s CLAUDE.md has diverged too far from `demo`'s for a merge to make sense here.
 
 Previous: 2026-07-15 (late) — AWS-readiness conformance pass: Bedrock Guardrails built from scratch, role-switcher
  identity desync + registry source-type fixes,
