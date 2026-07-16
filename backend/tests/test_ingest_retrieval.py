@@ -27,6 +27,19 @@ def test_build_chunks_carries_front_matter_metadata(tmp_path: Path) -> None:
     assert chunks[0].topic == "tenure & promotion"
 
 
+def test_build_chunks_skips_unreadable_files(tmp_path: Path, caplog) -> None:
+    # Startup re-indexes the corpus every boot, so a corrupt file (e.g. a
+    # truncated PDF) must be skipped with a warning, not crash indexing.
+    good = tmp_path / "policy.md"
+    good.write_text("---\ntitle: Good Policy\n---\nSabbatical leave requires six years of service.", encoding="utf-8")
+    corrupt = tmp_path / "truncated.pdf"
+    corrupt.write_bytes(b"%PDF-1.4 truncated garbage")
+    with caplog.at_level("WARNING"):
+        chunks = build_chunks([corrupt, good])
+    assert [chunk.source for chunk in chunks] == ["Good Policy"]
+    assert any("truncated.pdf" in record.getMessage() for record in caplog.records)
+
+
 def test_local_retrieval_returns_known_source(client: object) -> None:
     del client
     reload_index()
