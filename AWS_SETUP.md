@@ -132,6 +132,7 @@ file without exporting it does not change modes.
 | `DDB_DRAFTS_TABLE` | DynamoDB versioned drafting history (replaces SQLite) |
 | `CORPUS_BUCKET` | presigned S3 PUT uploads + event-driven ingestion |
 | `COGNITO_USER_POOL_ID` + `COGNITO_CLIENT_ID` | Cognito JWT auth, roles from `cognito:groups` (replaces demo accounts) |
+| `FRONTEND_ORIGINS` | comma-separated CORS origins for the FastAPI app itself. Local-only: deployed CORS comes from `cdk deploy -c frontendOrigin=...` (API Gateway + Function URL). Unset ⇒ the default localhost dev origins. |
 
 For the demo, Cognito remains optional and OFF. With Cognito unset, conflict
 visibility uses the frontend's demo `X-Role` header (and defaults to reviewer

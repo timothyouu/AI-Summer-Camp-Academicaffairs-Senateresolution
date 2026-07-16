@@ -18,6 +18,26 @@ UPLOAD_DIR = CORPUS_DIR / "uploads"
 # import the FastAPI app), so it lives here rather than in uploads.py.
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
+# Vite's default port, plus the next port it falls back to when 5173 is taken.
+DEFAULT_DEV_ORIGINS = (
+    "http://localhost:5173", "http://127.0.0.1:5173",
+    "http://localhost:5174", "http://127.0.0.1:5174",
+)
+
+
+def allowed_origins() -> list[str]:
+    """Browser origins the API accepts, overridable for non-default dev ports.
+
+    Deployed traffic is CORS-checked by API Gateway and the Lambda Function URL
+    (both fed by the stack's `frontendOrigin` context), so this list only has to
+    cover local dev — where a second worktree lands on an unexpected Vite port
+    and would otherwise be blocked with no way to configure it.
+    """
+    configured = os.getenv("FRONTEND_ORIGINS")
+    if not configured:
+        return list(DEFAULT_DEV_ORIGINS)
+    return [origin.strip().rstrip("/") for origin in configured.split(",") if origin.strip()]
+
 
 @dataclass(frozen=True)
 class Settings:

@@ -21,7 +21,7 @@ from . import (
     topics,
     uploads,
 )
-from .config import CORPUS_DIR, ensure_data_directories, get_settings
+from .config import CORPUS_DIR, allowed_origins, ensure_data_directories, get_settings
 from .conflicts import seed_demo_conflicts
 from .database import initialize_database
 from .ingest import build_index, discover_corpus_files
@@ -78,7 +78,7 @@ async def _cognito_auth_middleware(request: Request, call_next: RequestResponseE
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"],
+    allow_origins=allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
