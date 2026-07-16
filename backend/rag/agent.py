@@ -1,25 +1,35 @@
-from typing import Any
+from typing import Any, Union
 
 from strands import Agent
 from strands.models import BedrockModel
 
-from config import ( MODEL_ID, GUARDRAIL_ID, GUARDRAIL_VERSION )
+from config import (
+    BEDROCK_GUARDRAIL_ID,
+    BEDROCK_GUARDRAIL_VERSION,
+    MODEL_ID,
+    REGION,
+)
 
 from retrieval.search import (
     search_academic_policy,
     search_senate_policy
 )
 
-model = BedrockModel(
-    model_id=MODEL_ID,
-    guardrail_id=GUARDRAIL_ID,
-    guardrail_version=GUARDRAIL_VERSION
-)
-print("Guardrail enabled:", GUARDRAIL_ID, GUARDRAIL_VERSION)
+# Guardrails attach only when BEDROCK_GUARDRAIL_ID is set, matching the
+# env-gated pattern used across the repo (nothing flips until the env var is).
+model: Union[str, BedrockModel] = MODEL_ID
+if BEDROCK_GUARDRAIL_ID:
+    model = BedrockModel(
+        model_id=MODEL_ID,
+        region_name=REGION,
+        guardrail_id=BEDROCK_GUARDRAIL_ID,
+        guardrail_version=BEDROCK_GUARDRAIL_VERSION,
+    )
+    print("Guardrail enabled:", BEDROCK_GUARDRAIL_ID, BEDROCK_GUARDRAIL_VERSION)
 
 # Create the Strands Agent
 agent = Agent(
-    model=MODEL_ID,
+    model=model,
     tools=[
         search_academic_policy,
         search_senate_policy
