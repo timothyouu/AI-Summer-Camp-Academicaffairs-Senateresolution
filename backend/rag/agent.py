@@ -1,10 +1,19 @@
 from strands import Agent
-from config import MODEL_ID
+from strands.models import BedrockModel
+
+from config import ( MODEL_ID, GUARDRAIL_ID, GUARDRAIL_VERSION )
+
 from retrieval.search import (
     search_academic_policy,
     search_senate_policy
 )
 
+model = BedrockModel(
+    model_id=MODEL_ID,
+    guardrail_id=GUARDRAIL_ID,
+    guardrail_version=GUARDRAIL_VERSION
+)
+print("Guardrail enabled:", GUARDRAIL_ID, GUARDRAIL_VERSION)
 
 # Create the Strands Agent
 agent = Agent(
