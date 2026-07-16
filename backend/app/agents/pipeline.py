@@ -25,6 +25,15 @@ from .verification import span_is_grounded
 
 ESCALATION = "Multiple answers — consult your dean or the Provost's office."
 
+# Verification makes one blocking Bedrock call per candidate contradiction. A
+# rich real corpus can yield hundreds of candidate pairs (35 claims -> 200+
+# contradictions observed), so verifying all of them sequentially took >10 min
+# and read as a hang. Cap the number verified and run them concurrently so
+# worst-case latency is bounded regardless of corpus size. Candidates are
+# ordered by the detector; the cap keeps the highest-ranked ones.
+MAX_VERIFIED_CONTRADICTIONS = 12
+_VERIFY_MAX_WORKERS = 8
+
 
 class LLM(Protocol):
     def generate(self, system: str, user: str, json_mode: bool = False) -> str: ...
@@ -68,9 +77,17 @@ class AgentPipeline:
         analyses = self._detect(topic, claims, draft=draft)
         contradictions = [item for item in analyses if item.classification == "contradiction"]
         trace.append(AgentTraceStep(agent="conflict", label="Compare same-topic claims", status="warning" if contradictions else "complete", detail=self._analysis_detail(analyses)))
-        verified = [self._verify(item, analysis_passages) for item in contradictions]
+        # Cap and parallelize verification: one blocking Bedrock call per
+        # candidate would otherwise scale with claim-pair count and hang.
+        to_verify = contradictions[:MAX_VERIFIED_CONTRADICTIONS]
+        verified = self._verify_all(to_verify, analysis_passages)
         accepted = [item for item in verified if item.accepted]
-        trace.append(AgentTraceStep(agent="verifier", label="Verify quotes and adjudicate context", status="warning" if contradictions and not accepted else "complete", detail=f"Accepted {len(accepted)} of {len(contradictions)} candidate conflict(s); ungrounded claims were rejected."))
+        dropped = len(contradictions) - len(to_verify)
+        verifier_detail = f"Accepted {len(accepted)} of {len(to_verify)} candidate conflict(s); ungrounded claims were rejected."
+        if dropped > 0:
+            # Disclose the cap rather than silently truncating.
+            verifier_detail += f" {dropped} lower-ranked candidate(s) were not verified (cap {MAX_VERIFIED_CONTRADICTIONS})."
+        trace.append(AgentTraceStep(agent="verifier", label="Verify quotes and adjudicate context", status="warning" if to_verify and not accepted else "complete", detail=verifier_detail))
         escalation = ESCALATION if accepted or (contradictions and not accepted) else None
         if accepted:
             self._persist(accepted)
@@ -175,6 +192,20 @@ class AgentPipeline:
                     typology = "cba_vs_handbook_jurisdiction"
                 output.append(ConflictAnalysis(classification=classification, typology=typology, topic=topic, claim_a=first, claim_b=second, explanation="Deterministic comparison of modality and explicit thresholds."))
         return output or [ConflictAnalysis(classification="gap", topic=topic, explanation="No cross-source claim pair.", abstained=True)]
+
+    def _verify_all(self, analyses: list[ConflictAnalysis], passages: list[GroundedPassage]) -> list[VerifiedConflict]:
+        """Verify candidate contradictions concurrently, preserving input order.
+
+        Each _verify makes one blocking Bedrock call; running them in a thread
+        pool keeps wall-clock near a single call instead of the sum. The caller
+        has already capped the list, so the pool size is the effective ceiling.
+        """
+        if not analyses:
+            return []
+        if len(analyses) == 1:
+            return [self._verify(analyses[0], passages)]
+        with ThreadPoolExecutor(max_workers=min(_VERIFY_MAX_WORKERS, len(analyses))) as executor:
+            return list(executor.map(lambda item: self._verify(item, passages), analyses))
 
     def _verify(self, analysis: ConflictAnalysis, passages: list[GroundedPassage]) -> VerifiedConflict:
         claims = [claim for claim in (analysis.claim_a, analysis.claim_b) if claim is not None]

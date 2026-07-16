@@ -10,8 +10,8 @@ from backend.app.agents.variance import (
     log_variance,
     soft_language,
 )
-from backend.app.chat import _agent_grounded_answer, shape_response_for_role
-from backend.app.retrieval import INDEX, reload_index
+from backend.app.chat import _agent_grounded_answer, _local_index_answer, shape_response_for_role
+from backend.app.retrieval import INDEX, SearchResult, reload_index
 
 
 def _claim(
@@ -324,6 +324,232 @@ def test_agent_grounded_response_keeps_reviewer_detail() -> None:
     assert set(response.conflict.sources) == {"Unit 3 CBA", "University Handbook"}
     assert response.conflict.conflict_id is not None
     assert len(store.created) == 1
+
+
+# --- final answer assembly (synthesis vs raw chunks) ------------------------
+
+
+class SynthesizingLLM:
+    """Stands in for the pipeline's selected (authoritative) LLM.
+
+    Returns a natural-language summary that quotes none of the grounded spans
+    verbatim and never uses agreement/alignment language.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def generate(self, system: str, user: str, json_mode: bool = False) -> str:
+        self.calls.append((system, user))
+        return (
+            "In short, prior service may be recognized toward your review timeline, "
+            "but it is not automatic. Confirm the specifics with Faculty Affairs."
+        )
+
+
+def _no_variance_result() -> PipelineResult:
+    """One benign grounded claim plus an unrelated second source: no variance."""
+    only_claim = _claim(
+        "CSUB University_Handbook_2025",
+        "The Handbook may be amended by the Academic Senate.",
+        "may",
+        topic="senate procedures",
+        section="Preface",
+    )
+    return PipelineResult(
+        passages=[
+            GroundedPassage(text=only_claim.citation_span, span=only_claim.citation_span, source="CSUB University_Handbook_2025", section="Preface", doc_type="handbook", topic="senate procedures"),
+        ],
+        claims=[only_claim],
+    )
+
+
+def test_no_variance_answer_is_natural_language_not_raw_chunks() -> None:
+    llm = SynthesizingLLM()
+    response = _agent_grounded_answer(
+        _no_variance_result(), "What is the purpose of the University Handbook?",
+        store=MemoryStore(), llm=llm,
+    )
+    # The synthesized summary is used, not the verbatim grounded span.
+    assert llm.calls
+    assert "In short, prior service may be recognized" in response.answer
+    assert "The Handbook may be amended by the Academic Senate." not in response.answer
+    assert "Based on the supplied policy sources" not in response.answer
+
+
+def test_no_variance_answer_has_no_agreement_or_alignment_language() -> None:
+    response = _agent_grounded_answer(
+        _no_variance_result(), "What is the purpose of the University Handbook?",
+        store=MemoryStore(), llm=SynthesizingLLM(),
+    )
+    assert response.conflict is None
+    lowered = response.answer.lower()
+    for forbidden in ("both documents agree", "documents align", "sources align", "align", "agree"):
+        assert forbidden not in lowered
+    # No unsolicited variance/conflict commentary on a normal question.
+    assert SOFT_SUMMARY not in response.answer
+    assert VARIANCE_ESCALATION not in response.answer
+
+
+def test_variance_answer_has_no_agreement_or_alignment_language() -> None:
+    response = _agent_grounded_answer(
+        _accepted_result(), "Does service credit count?",
+        store=MemoryStore(), llm=SynthesizingLLM(),
+    )
+    lowered = response.answer.lower()
+    for forbidden in ("both documents agree", "documents align", "sources align", "align", "agree"):
+        assert forbidden not in lowered
+
+
+def test_variance_answer_still_includes_soft_variance_language() -> None:
+    response = _agent_grounded_answer(
+        _accepted_result(), "Does service credit count?",
+        store=MemoryStore(), llm=SynthesizingLLM(),
+    )
+    assert response.conflict is not None and response.conflict.detected
+    assert SOFT_SUMMARY in response.answer
+    assert VARIANCE_ESCALATION in response.answer
+
+
+# --- informational questions (no extracted claims) must still answer --------
+
+
+def _informational_result() -> PipelineResult:
+    """Retrieval succeeds but no normative (must/may) claim is extracted —
+    the common shape of an informational question ('what is the purpose of...').
+    """
+    long_passage = (
+        "The University Handbook is the primary reference documenting academic "
+        "governance at CSUB, the Academic Senate's role, campus policies, and "
+        "personnel procedures for faculty. " * 4
+    ).strip()
+    return PipelineResult(
+        passages=[
+            GroundedPassage(text=long_passage, span=long_passage, source="CSUB University Handbook 2025", section="Section 101", doc_type="handbook", topic="governance"),
+            GroundedPassage(text="Curriculum review and committee responsibilities are described in the Handbook.", span="x", source="CSUB University Handbook 2025", section="Section 102", doc_type="handbook", topic="governance"),
+        ],
+        claims=[],  # informational question: no normative claim extracted
+    )
+
+
+def test_informational_question_synthesizes_instead_of_abstaining() -> None:
+    llm = SynthesizingLLM()
+    response = _agent_grounded_answer(
+        _informational_result(), "What is the purpose of the University Handbook?",
+        store=MemoryStore(), llm=llm,
+    )
+    # The claimless path must NOT emit the old abstention message; it synthesizes.
+    assert llm.calls
+    assert "In short, prior service may be recognized" in response.answer
+    assert "could not extract a grounded policy claim" not in response.answer
+    assert "abstained" not in response.answer.lower()
+
+
+def test_informational_question_cites_retrieved_passages() -> None:
+    # With no claims, citations fall back to the retrieved passages so the answer
+    # still has real sources after it (not instead of it).
+    response = _agent_grounded_answer(
+        _informational_result(), "What is the purpose of the University Handbook?",
+        store=MemoryStore(), llm=SynthesizingLLM(),
+    )
+    assert len(response.citations) >= 1
+    assert response.citations[0].source == "CSUB University Handbook 2025"
+    assert response.conflict is None
+
+
+def test_informational_answer_never_dumps_raw_passage_text() -> None:
+    result = _informational_result()
+    long_passage = result.passages[0].text
+    response = _agent_grounded_answer(
+        result, "What is the purpose of the University Handbook?",
+        store=MemoryStore(), llm=SynthesizingLLM(),
+    )
+    assert long_passage not in response.answer
+
+
+def test_claimless_question_without_llm_returns_safe_message_not_dump() -> None:
+    # No generation model (local mode) and no claims: safe message, never a dump.
+    from backend.app.chat import _NO_SYNTHESIS_MESSAGE
+
+    result = _informational_result()
+    long_passage = result.passages[0].text
+    response = _agent_grounded_answer(
+        result, "What is the purpose of the University Handbook?",
+        store=MemoryStore(), llm=None,
+    )
+    assert response.answer == _NO_SYNTHESIS_MESSAGE
+    assert long_passage not in response.answer
+
+
+# --- local-index final answer (no raw-chunk dump) --------------------------
+
+
+_HANDBOOK_CHUNK = (
+    "The University Handbook serves as the primary reference for academic "
+    "governance, campus policies, procedures, and personnel processes. It "
+    "documents which bodies are responsible for university decisions and where "
+    "official procedures are recorded. " * 3
+).strip()
+
+
+def _handbook_results() -> list[SearchResult]:
+    return [
+        SearchResult(
+            text=_HANDBOOK_CHUNK, source="University Handbook", section="Section 101",
+            doc_type="handbook", page=1, topic="governance", score=0.9,
+        ),
+        SearchResult(
+            text="Unrelated collective bargaining language about FERP work limits.",
+            source="Unit 3 CBA", section="Article 29", doc_type="cba", page=2,
+            topic="retirement", score=0.4,
+        ),
+    ]
+
+
+def test_local_index_answer_never_dumps_raw_chunks_without_llm() -> None:
+    # No LLM available (local mode): the answer must be the safe message, not a
+    # raw dump, and must not contain the long retrieved chunk text.
+    response = _local_index_answer(_handbook_results(), "What is the purpose of the University Handbook?")
+    assert "The most relevant supplied policy passages state" not in response.answer
+    assert _HANDBOOK_CHUNK not in response.answer
+    # Long raw document chunk must not leak into the user-facing answer.
+    assert len(response.answer) < len(_HANDBOOK_CHUNK)
+    # Citations still appear (after the answer), not instead of it.
+    assert response.answer.strip()
+    assert len(response.citations) >= 1
+    assert response.citations[0].source == "University Handbook"
+
+
+def test_local_index_answer_has_no_agreement_or_alignment_language() -> None:
+    response = _local_index_answer(_handbook_results(), "What is the purpose of the University Handbook?")
+    lowered = response.answer.lower()
+    for forbidden in ("both documents agree", "documents align", "sources align", "align", "agree"):
+        assert forbidden not in lowered
+    # A local-index answer never carries variance/conflict commentary.
+    assert response.conflict is None
+
+
+def test_local_index_answer_synthesizes_when_llm_available() -> None:
+    response = _local_index_answer(
+        _handbook_results(), "What is the purpose of the University Handbook?",
+        llm=SynthesizingLLM(),
+    )
+    assert "In short, prior service may be recognized" in response.answer
+    assert "The most relevant supplied policy passages state" not in response.answer
+    assert _HANDBOOK_CHUNK not in response.answer
+
+
+def test_handbook_purpose_question_end_to_end(client) -> None:  # type: ignore[no-untyped-def]
+    # The reported regression: this normal informational question must not return
+    # a raw-chunk dump beginning with the banned phrase.
+    response = client.post("/api/chat", json={"question": "What is the purpose of the University Handbook?"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["answer"].strip()
+    assert "The most relevant supplied policy passages state" not in payload["answer"]
+    lowered = payload["answer"].lower()
+    assert "both documents agree" not in lowered
+    assert "documents align" not in lowered
 
 
 # --- logging -----------------------------------------------------------------

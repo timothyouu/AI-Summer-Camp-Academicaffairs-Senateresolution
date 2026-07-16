@@ -189,8 +189,47 @@ Implements the smallest MVP slice of `lambdaspec.md`: a soft "policy variance" r
 - **Deferred per §15 (not built):** dedicated variance table (Q4), async log-writer Lambda (Q6), variance on `/api/check-resolution` (Q7), self-consistency N-run gate (Q10), hybrid/rerank (Q11), section re-chunking + KB re-ingest (Q12).
 - **Local verifier note:** this shell injects `BEDROCK_KB_ID`/`AWS_REGION`/`AWS_PROFILE` via Claude Code's own Bedrock config (`CLAUDE_CODE_USE_BEDROCK=1`), which flips the app into AWS mode. Run tests with those unset: `env -u BEDROCK_KB_ID -u AWS_REGION -u AWS_PROFILE python -m pytest backend/tests -q`. The local index must be built first (`python -m backend.scripts.build_index`).
 
+## Answer Synthesis + Generation Gate (2026-07-16, `lambda-variance-spec` branch)
+Fixed a response-formatting regression where chat returned **raw retrieved chunks** as the
+user-facing answer, and guaranteed helpful natural-language answers for **informational questions**
+(which will be extremely common). Scope was **final answer assembly + the generation seam only** —
+retrieval, variance thresholds, logging schema, and AWS infra are untouched. Verifier is now
+**166 backend tests** (130 + 4 answer-synthesis + 4 informational-guarantee + 3 generation-gate,
+minus overlaps; net counted live).
+- **Answer prose is now LLM-synthesized from the retrieved passages**, not dumped verbatim.
+  `chat.py::_synthesize(question, grounded, llm)` builds a plain-language answer via the pipeline's
+  selected LLM under `_SYNTHESIS_SYSTEM` (summarize only supplied text; never "agree"/"align"; no
+  conflict/variance commentary — that is appended separately). The banned string
+  *"The most relevant supplied policy passages state"* and the `text[:360]` concatenation in
+  `_local_index_answer` are **deleted**. When no model is available (local mode, `llm.generate`
+  raises by design), both paths return a safe honest message (`_NO_SYNTHESIS_MESSAGE`) with the
+  retrieved passages attached **as citations after** the answer — never a raw dump.
+- **Informational questions no longer abstain.** `_agent_grounded_answer` previously answered and
+  cited **only from extracted normative claims** (must/may/must_not), so "what is the purpose of…"
+  questions (no such claims) hit *"could not extract a grounded policy claim… abstained"* with zero
+  citations. It now synthesizes from `result.passages` (the full grounded source text) and, when
+  there are no claims, derives citations from those passages. Conflict detection still uses claims;
+  this governs only the user-facing prose. **Verified end-to-end against real Bedrock** (this shell's
+  `converse`): the exact desired Handbook-purpose answer, cited, Handbook-only, no false conflict.
+- **Two-gate tripwire CLOSED.** `create_pipeline` previously required `retrieval_aws` **and**
+  `strands_available()` for authoritative mode, so naming `BEDROCK_KB_ID` **alone** gave real KB
+  retrieval but left generation on `ModuleLLM` (which raises) → still no answers. Now a configured KB
+  is sufficient: **Strands when installed, else a direct boto3 Bedrock `converse` seam**
+  (`agents/factory.py::BedrockConverseLLM`, model from `BEDROCK_MODEL_ID`, default
+  `us.anthropic.claude-sonnet-4-5-20250929-v1:0`; Guardrail attaches when `guardrails_aws`). This
+  matches the existing boto3 retrieval seam and the "Gemini/fallback if Bedrock access falls through"
+  spirit. `boto3` is a stated dependency; `strands` stays optional.
+- **Live requirement for good answers (record this — it is a genuine tripwire):** the product needs
+  `BEDROCK_KB_ID` set **+ AWS creds/Bedrock model access**. Strands is now optional (boto3 fallback).
+  A KB ID with no model access still degrades to the safe message, not a crash.
+
 ## Last Updated
-2026-07-16 — Fixed two live-only variance defects on the `lambda-variance-spec` branch (no-variance false positive from a single grounded source; `_verify` 500 on a non-object verifier response). Verifier now **130 backend tests**. See the Variance Layer section.
+2026-07-16 — Answer synthesis + generation-gate fix on `lambda-variance-spec`: chat no longer dumps
+raw retrieved chunks; informational questions get LLM-synthesized cited answers instead of abstaining
+(verified against real Bedrock); the KB-without-Strands tripwire is closed via a boto3 `converse`
+fallback. Verifier now **166 backend tests**. See the Answer Synthesis + Generation Gate section.
+
+Previous: 2026-07-16 — Fixed two live-only variance defects on the `lambda-variance-spec` branch (no-variance false positive from a single grounded source; `_verify` 500 on a non-object verifier response). Verifier now **130 backend tests**. See the Variance Layer section.
 
 Previous: 2026-07-16 — Merged teammate PR #4 (source lifecycle, per-user permissions, citation links, persistent
 drafting workspace) into `main` and `prod`, resolved the `llm_revision` conflict, fixed merge seams,

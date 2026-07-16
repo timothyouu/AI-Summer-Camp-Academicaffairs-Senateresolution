@@ -31,6 +31,110 @@ def test_retrieval_maps_knowledge_base_response(monkeypatch: Any) -> None:
     assert (result.text, result.source, result.section, result.page, result.score) == ("Policy passage", "handbook.pdf", "304.4.1", 42, 0.91)
 
 
+class _RecordingKBClient:
+    """Captures every retrieve() retrievalConfiguration for assertion."""
+
+    def __init__(self) -> None:
+        self.configs: list[dict[str, object]] = []
+
+    def retrieve(self, **kwargs: object) -> dict[str, object]:
+        self.configs.append(kwargs["retrievalConfiguration"])  # type: ignore[index]
+        return {"retrievalResults": []}
+
+
+class ValidationException(Exception):
+    """Stand-in for botocore's ValidationException (matched by class name)."""
+
+
+def test_bedrock_client_receives_bounded_timeout_config(monkeypatch: Any) -> None:
+    # The KB client must be built with a bounded botocore Config so a stalled or
+    # throttled socket fails fast instead of hanging the worker (default 60s x
+    # retries ~= 5 min). Capture the config passed to boto3.client.
+    captured: dict[str, object] = {}
+
+    def fake_client(_service: str, **kwargs: object) -> _RecordingKBClient:
+        captured.update(kwargs)
+        return _RecordingKBClient()
+
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    monkeypatch.setenv("BEDROCK_KB_ID", "KB1")
+    monkeypatch.setenv("BEDROCK_READ_TIMEOUT", "25")
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=fake_client))
+    search("tenure", 3)
+    config = captured["config"]
+    assert config.connect_timeout == 5.0  # type: ignore[attr-defined]
+    assert config.read_timeout == 25.0  # type: ignore[attr-defined]
+    assert config.retries == {"max_attempts": 2, "mode": "standard"}  # type: ignore[attr-defined]
+
+
+def test_vector_mode_sends_vector_search_configuration(monkeypatch: Any) -> None:
+    client = _RecordingKBClient()
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    monkeypatch.setenv("BEDROCK_KB_ID", "KB1")
+    monkeypatch.delenv("BEDROCK_KB_SEARCH_MODE", raising=False)  # default is vector
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *_a, **_k: client))
+    search("tenure", 3)
+    assert client.configs == [{"vectorSearchConfiguration": {"numberOfResults": 6}}]
+
+
+def test_managed_mode_sends_managed_search_configuration(monkeypatch: Any) -> None:
+    client = _RecordingKBClient()
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    monkeypatch.setenv("BEDROCK_KB_ID", "KB1")
+    monkeypatch.setenv("BEDROCK_KB_SEARCH_MODE", "managed")
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *_a, **_k: client))
+    search("tenure", 3)
+    assert client.configs == [{"managedSearchConfiguration": {"numberOfResults": 6}}]
+
+
+def test_managed_kb_validation_triggers_one_managed_retry(monkeypatch: Any) -> None:
+    class RetryingClient:
+        def __init__(self) -> None:
+            self.configs: list[dict[str, object]] = []
+
+        def retrieve(self, **kwargs: object) -> dict[str, object]:
+            config = kwargs["retrievalConfiguration"]  # type: ignore[index]
+            self.configs.append(config)
+            if "vectorSearchConfiguration" in config:
+                raise ValidationException(
+                    "Incompatible configuration: vectorSearchConfiguration is not supported "
+                    "for managed knowledge bases. Use managedSearchConfiguration instead."
+                )
+            return {"retrievalResults": []}
+
+    client = RetryingClient()
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    monkeypatch.setenv("BEDROCK_KB_ID", "KB1")
+    monkeypatch.delenv("BEDROCK_KB_SEARCH_MODE", raising=False)  # start in vector mode
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *_a, **_k: client))
+    search("tenure", 3)
+    assert client.configs == [
+        {"vectorSearchConfiguration": {"numberOfResults": 6}},
+        {"managedSearchConfiguration": {"numberOfResults": 6}},
+    ]
+
+
+def test_unrelated_validation_exception_is_reraised(monkeypatch: Any) -> None:
+    class FailingClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def retrieve(self, **_: object) -> dict[str, object]:
+            self.calls += 1
+            raise ValidationException("knowledgeBaseId 'KB1' failed to satisfy constraint.")
+
+    client = FailingClient()
+    monkeypatch.setenv("AWS_REGION", "us-west-2")
+    monkeypatch.setenv("BEDROCK_KB_ID", "KB1")
+    monkeypatch.delenv("BEDROCK_KB_SEARCH_MODE", raising=False)
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *_a, **_k: client))
+    import pytest
+
+    with pytest.raises(ValidationException):
+        search("tenure", 3)
+    assert client.calls == 1  # no retry for unrelated errors
+
+
 def test_dynamodb_stores_use_low_level_items(monkeypatch: Any) -> None:
     class Client:
         def __init__(self) -> None:

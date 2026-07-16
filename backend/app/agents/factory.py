@@ -4,7 +4,7 @@ import importlib
 import importlib.util
 from typing import Any
 
-from ..config import get_settings
+from ..config import bedrock_client_config, get_settings
 from .pipeline import AgentPipeline, LLM
 
 
@@ -49,6 +49,46 @@ class StrandsLLM:
         return _message_text(getattr(result, "message", result))
 
 
+class BedrockConverseLLM:
+    """Direct Bedrock generation via boto3 ``converse``.
+
+    Used on the authoritative path when a Knowledge Base is configured but the
+    Strands SDK is not installed — so naming ``BEDROCK_KB_ID`` alone is enough to
+    get real generated answers, closing the "KB set but generation still local"
+    tripwire. Mirrors the boto3 seam already used for KB retrieval; the
+    Guardrail attaches when configured, matching ``StrandsLLM``.
+    """
+
+    def __init__(self) -> None:
+        import boto3  # type: ignore[import-not-found]  # Lazy: absent in local mode.
+
+        settings = get_settings()
+        self._client: Any = boto3.client(
+            "bedrock-runtime", region_name=settings.aws_region,
+            config=bedrock_client_config(settings),
+        )
+        self._model_id = settings.bedrock_model_id
+        self._guardrail: dict[str, Any] | None = None
+        if settings.guardrails_aws:
+            self._guardrail = {
+                "guardrailIdentifier": settings.bedrock_guardrail_id,
+                "guardrailVersion": settings.bedrock_guardrail_version or "DRAFT",
+            }
+
+    def generate(self, system: str, user: str, json_mode: bool = False) -> str:
+        del json_mode
+        kwargs: dict[str, Any] = {
+            "modelId": self._model_id,
+            "system": [{"text": system}],
+            "messages": [{"role": "user", "content": [{"text": user}]}],
+            "inferenceConfig": {"maxTokens": 1024, "temperature": 0.0},
+        }
+        if self._guardrail is not None:
+            kwargs["guardrailConfig"] = self._guardrail
+        response = self._client.converse(**kwargs)
+        return _message_text(response.get("output", {}).get("message", {}))
+
+
 def _message_text(message: Any) -> str:
     """Extract assistant text from a Strands result message.
 
@@ -66,9 +106,16 @@ def _message_text(message: Any) -> str:
 
 
 def create_pipeline(*, llm: LLM | None = None) -> AgentPipeline:
-    """Select Strands only when both its SDK and a configured Bedrock KB are present."""
+    """Pick the generation seam for a configured Knowledge Base.
+
+    Naming ``BEDROCK_KB_ID`` is sufficient to get real generated answers: the
+    Strands SDK is used when installed, otherwise generation falls back to a
+    direct boto3 Bedrock ``converse`` call. Only when no KB is configured does
+    the pipeline stay fully local (``ModuleLLM``, whose ``generate`` raises).
+    """
     if llm is not None:
         return AgentPipeline(llm=llm)
-    if get_settings().retrieval_aws and strands_available():
-        return AgentPipeline(llm=StrandsLLM(), authoritative=True)
+    if get_settings().retrieval_aws:
+        selected: LLM = StrandsLLM() if strands_available() else BedrockConverseLLM()
+        return AgentPipeline(llm=selected, authoritative=True)
     return AgentPipeline()

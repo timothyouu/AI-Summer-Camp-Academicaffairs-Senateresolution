@@ -76,6 +76,33 @@ def test_aws_chat_returns_grounded_pipeline_answer_and_conflict(client: TestClie
     assert pipeline.calls == [("Does service credit count toward tenure?", False)]
 
 
+class RaisingPipeline:
+    """Authoritative pipeline whose Bedrock call fails (e.g. a bounded timeout)."""
+
+    authoritative = True
+    llm = None
+
+    def run(self, topic: str, *, draft: bool = False, passages: object = None) -> PipelineResult:
+        raise RuntimeError("Read timeout on endpoint URL: bedrock-runtime")
+
+
+def test_aws_chat_degrades_to_safe_message_on_pipeline_failure(
+    client: TestClient, monkeypatch: Any,
+) -> None:
+    # A bounded Bedrock timeout now raises quickly instead of hanging ~5 min.
+    # The endpoint must degrade to the safe message with HTTP 200, not 500.
+    monkeypatch.setattr(chat, "create_pipeline", lambda: RaisingPipeline())
+
+    response = client.post("/api/chat", json={"question": "Does service credit count toward tenure?"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["mode"] == "agent-grounded"
+    assert payload["answer"] == chat._NO_SYNTHESIS_MESSAGE
+    assert payload["citations"] == []
+    assert payload["conflict"] is None
+
+
 def test_aws_resolution_maps_only_draft_to_policy_pipeline_findings(
     client: TestClient, monkeypatch: Any,
 ) -> None:

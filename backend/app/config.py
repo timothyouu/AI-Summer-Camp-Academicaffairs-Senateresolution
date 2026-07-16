@@ -45,6 +45,14 @@ class Settings:
     aws_profile: str | None = None
     dynamodb_endpoint_url: str | None = None
     bedrock_kb_id: str | None = None
+    bedrock_kb_search_mode: str = "vector"
+    bedrock_model_id: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    # Bounded so a throttled/stalled Bedrock socket fails fast instead of hanging
+    # the worker. boto3 defaults (60s read x 4 retries ≈ 5 min) can wedge the
+    # request thread — and the pipeline's ThreadPoolExecutor blocks on it.
+    bedrock_connect_timeout: float = 5.0
+    bedrock_read_timeout: float = 25.0
+    bedrock_max_attempts: int = 2
     bedrock_guardrail_id: str | None = None
     bedrock_guardrail_version: str | None = None
     ddb_conflicts_table: str | None = None
@@ -117,6 +125,11 @@ def get_settings() -> Settings:
         aws_region=value("AWS_REGION"), aws_profile=value("AWS_PROFILE"),
         dynamodb_endpoint_url=value("DYNAMODB_ENDPOINT_URL"),
         bedrock_kb_id=value("BEDROCK_KB_ID"),
+        bedrock_kb_search_mode=(value("BEDROCK_KB_SEARCH_MODE") or "vector").strip().lower(),
+        bedrock_model_id=value("BEDROCK_MODEL_ID") or "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        bedrock_connect_timeout=float(value("BEDROCK_CONNECT_TIMEOUT") or 5.0),
+        bedrock_read_timeout=float(value("BEDROCK_READ_TIMEOUT") or 25.0),
+        bedrock_max_attempts=int(value("BEDROCK_MAX_ATTEMPTS") or 2),
         bedrock_guardrail_id=value("BEDROCK_GUARDRAIL_ID"),
         bedrock_guardrail_version=value("BEDROCK_GUARDRAIL_VERSION"),
         ddb_conflicts_table=first("DDB_CONFLICTS_TABLE", "DYNAMODB_CONFLICTS_TABLE"),
@@ -128,6 +141,23 @@ def get_settings() -> Settings:
         ddb_recurring_questions_table=first("DDB_RECURRING_QUESTIONS_TABLE", "DYNAMODB_RECURRING_QUESTIONS_TABLE"),
         corpus_bucket=value("CORPUS_BUCKET"), cognito_user_pool_id=value("COGNITO_USER_POOL_ID"),
         cognito_client_id=value("COGNITO_CLIENT_ID"),
+    )
+
+
+def bedrock_client_config(settings: Settings | None = None):  # type: ignore[no-untyped-def]
+    """Bounded botocore Config for Bedrock clients (lazy botocore import).
+
+    Keeps a single source of truth for the timeout/retry policy so both the
+    runtime (generation) and agent-runtime (KB retrieval) clients fail fast
+    instead of hanging the request thread on a stalled or throttled socket.
+    """
+    from botocore.config import Config  # Lazy: botocore only present in AWS mode.
+
+    settings = settings or get_settings()
+    return Config(
+        connect_timeout=settings.bedrock_connect_timeout,
+        read_timeout=settings.bedrock_read_timeout,
+        retries={"max_attempts": settings.bedrock_max_attempts, "mode": "standard"},
     )
 
 
