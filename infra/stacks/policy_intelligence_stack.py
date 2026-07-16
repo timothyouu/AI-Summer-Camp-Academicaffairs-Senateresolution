@@ -109,9 +109,10 @@ class PolicyIntelligenceStack(Stack):
         region = self.region
 
         corpus_bucket = self._build_corpus_bucket()
-        conflicts_table, uploads_table, registry_table, permissions_table, drafts_table = (
-            self._build_dynamodb_tables()
-        )
+        (
+            conflicts_table, uploads_table, registry_table, permissions_table,
+            drafts_table, feedback_table, recurring_questions_table,
+        ) = self._build_dynamodb_tables()
         user_pool, user_pool_client, user_pool_domain = self._build_cognito()
         collection, kb_role = self._build_opensearch_and_kb_role(corpus_bucket)
         vector_index_resource = self._build_vector_index_custom_resource(collection, region)
@@ -147,6 +148,8 @@ class PolicyIntelligenceStack(Stack):
             registry_table=registry_table,
             permissions_table=permissions_table,
             drafts_table=drafts_table,
+            feedback_table=feedback_table,
+            recurring_questions_table=recurring_questions_table,
             knowledge_base=knowledge_base,
             data_source=data_source,
             user_pool=user_pool,
@@ -163,6 +166,8 @@ class PolicyIntelligenceStack(Stack):
             registry_table=registry_table,
             permissions_table=permissions_table,
             drafts_table=drafts_table,
+            feedback_table=feedback_table,
+            recurring_questions_table=recurring_questions_table,
             knowledge_base=knowledge_base,
             data_source=data_source,
             user_pool=user_pool,
@@ -205,7 +210,10 @@ class PolicyIntelligenceStack(Stack):
     # ------------------------------------------------------------------
     def _build_dynamodb_tables(
         self,
-    ) -> tuple[dynamodb.Table, dynamodb.Table, dynamodb.Table, dynamodb.Table, dynamodb.Table]:
+    ) -> tuple[
+        dynamodb.Table, dynamodb.Table, dynamodb.Table,
+        dynamodb.Table, dynamodb.Table, dynamodb.Table, dynamodb.Table,
+    ]:
         conflicts_table = dynamodb.Table(
             self,
             "ConflictLogTable",
@@ -271,7 +279,32 @@ class PolicyIntelligenceStack(Stack):
             removal_policy=RemovalPolicy.DESTROY,
         )
 
-        return conflicts_table, uploads_table, registry_table, permissions_table, drafts_table
+        # Application-memory tables (Notion §9 lists feedback as a core DynamoDB
+        # table; "Answer feedback" and "Recurring questions hub" are the two
+        # Should-Have items they satisfy). These carry the key schemas Yaza
+        # provisioned by script — feedback_id / question_id — because nothing in
+        # this codebase predates them, so there is no conflicting store to
+        # reconcile. CDK owns creation here so one `cdk deploy` stands the whole
+        # stack up; scripts/setup_dynamodb_tables.sh remains the no-CDK fallback.
+        feedback_table = dynamodb.Table(
+            self,
+            "FeedbackTable",
+            partition_key=dynamodb.Attribute(name="feedback_id", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        recurring_questions_table = dynamodb.Table(
+            self,
+            "RecurringQuestionsTable",
+            partition_key=dynamodb.Attribute(name="question_id", type=dynamodb.AttributeType.STRING),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        return (
+            conflicts_table, uploads_table, registry_table, permissions_table,
+            drafts_table, feedback_table, recurring_questions_table,
+        )
 
     # ------------------------------------------------------------------
     # Cognito
@@ -722,6 +755,8 @@ class PolicyIntelligenceStack(Stack):
         registry_table: dynamodb.Table,
         permissions_table: dynamodb.Table,
         drafts_table: dynamodb.Table,
+        feedback_table: dynamodb.Table,
+        recurring_questions_table: dynamodb.Table,
         knowledge_base: bedrock.CfnKnowledgeBase,
         data_source: bedrock.CfnDataSource,
         user_pool: cognito.UserPool,
@@ -784,6 +819,9 @@ class PolicyIntelligenceStack(Stack):
                 "DDB_REGISTRY_TABLE": registry_table.table_name,
                 "DDB_PERMISSIONS_TABLE": permissions_table.table_name,
                 "DDB_DRAFTS_TABLE": drafts_table.table_name,
+                # Application memory (Notion §9): answer feedback + recurring questions.
+                "DDB_FEEDBACK_TABLE": feedback_table.table_name,
+                "DDB_RECURRING_QUESTIONS_TABLE": recurring_questions_table.table_name,
                 "CORPUS_BUCKET": corpus_bucket.bucket_name,
                 "COGNITO_USER_POOL_ID": user_pool.user_pool_id,
                 "COGNITO_CLIENT_ID": user_pool_client.user_pool_client_id,
@@ -794,6 +832,8 @@ class PolicyIntelligenceStack(Stack):
         registry_table.grant_read_write_data(fn)
         permissions_table.grant_read_write_data(fn)
         drafts_table.grant_read_write_data(fn)
+        feedback_table.grant_read_write_data(fn)
+        recurring_questions_table.grant_read_write_data(fn)
         corpus_bucket.grant_read_write(fn)
         # AI-drafting version history copies drafts into S3 under drafts/*
         # (implementation3.md Task 9) — grant_read_write above already covers
@@ -929,6 +969,8 @@ class PolicyIntelligenceStack(Stack):
         registry_table: dynamodb.Table,
         permissions_table: dynamodb.Table,
         drafts_table: dynamodb.Table,
+        feedback_table: dynamodb.Table,
+        recurring_questions_table: dynamodb.Table,
         knowledge_base: bedrock.CfnKnowledgeBase,
         data_source: bedrock.CfnDataSource,
         user_pool: cognito.UserPool,
@@ -949,6 +991,8 @@ class PolicyIntelligenceStack(Stack):
         CfnOutput(self, "DdbRegistryTable", value=registry_table.table_name)
         CfnOutput(self, "DdbPermissionsTable", value=permissions_table.table_name)
         CfnOutput(self, "DdbDraftsTable", value=drafts_table.table_name)
+        CfnOutput(self, "DdbFeedbackTable", value=feedback_table.table_name)
+        CfnOutput(self, "DdbRecurringQuestionsTable", value=recurring_questions_table.table_name)
         CfnOutput(self, "CognitoUserPoolId", value=user_pool.user_pool_id)
         CfnOutput(self, "CognitoClientId", value=user_pool_client.user_pool_client_id)
         CfnOutput(self, "CognitoHostedUiUrl", value=hosted_ui_url)

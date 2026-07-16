@@ -90,3 +90,26 @@ def test_cognito_employee_cannot_read_conflict_log(client: TestClient, monkeypat
     response = client.get("/api/conflicts", headers={"Authorization": "Bearer employee-token"})
 
     assert response.status_code == 403
+
+
+def test_cognito_employee_can_submit_feedback_but_cannot_list_it(
+    client: TestClient, monkeypatch: Any,
+) -> None:
+    _enable_cognito(monkeypatch)
+    monkeypatch.setattr(auth, "decode_and_verify_token", lambda *_a, **_k: {"cognito:groups": ["employees"]})
+    headers = {"Authorization": "Bearer employee.jwt.token"}
+
+    created = client.post(
+        "/api/feedback",
+        headers=headers,
+        json={
+            "answer_id": "answer-1",
+            "question": "What is the policy?",
+            "rating": "helpful",
+            "role": "employee",
+        },
+    )
+    listing = client.get("/api/feedback", headers=headers)
+
+    assert created.status_code == 201
+    assert listing.status_code == 403

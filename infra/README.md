@@ -6,6 +6,12 @@ architecture in `implementation2.md` §2 / §3 Phase A: S3 corpus bucket,
 Bedrock Knowledge Base on an OpenSearch Serverless vector collection,
 DynamoDB tables, Cognito, and an API Gateway HTTP API + Lambda.
 
+The stack creates `ConflictLog` and `Uploads` directly. It imports five retained
+application-memory tables by name—feedback, recurring questions, access
+control, source registry, and draft versions—so Yaza's already provisioned data
+is not replaced. Run `../scripts/setup_dynamodb_tables.sh` before using those
+routes in AWS; the script is idempotent.
+
 This file was written and verified with `python3 -m py_compile` only —
 **`cdk synth`/`cdk deploy` have not been run**, because `aws-cdk-lib` is not
 installed in this dev environment and installs are hook-blocked. Construct

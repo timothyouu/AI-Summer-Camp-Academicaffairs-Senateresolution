@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { useLocation, useParams } from "react-router-dom";
-import { askQuestion, getConversation } from "../api";
+import { askQuestion, getConversation, submitFeedback, type FeedbackRating } from "../api";
 import BackButton from "../components/BackButton";
 import { type Answer, type Citation } from "../data/mock";
 import { useRole } from "../state/role";
@@ -49,7 +49,9 @@ function CitationText({ text, citationIds }: { text: string; citationIds: number
 }
 
 function AnswerBody({ answer, showQuestion = false }: { answer: Answer; showQuestion?: boolean }) {
-  const [feedback, setFeedback] = useState<"helpful" | "not-helpful" | null>(null);
+  const { role } = useRole();
+  const [feedback, setFeedback] = useState<FeedbackRating | null>(null);
+  const [submittingFeedback, setSubmittingFeedback] = useState(false);
   const [notice, setNotice] = useState("");
   const copyAnswer = async () => {
     try {
@@ -57,6 +59,26 @@ function AnswerBody({ answer, showQuestion = false }: { answer: Answer; showQues
       setNotice("Answer copied to clipboard.");
     } catch {
       setNotice("Copy is unavailable in this browser. Select the answer text to copy it.");
+    }
+  };
+  const sendFeedback = async (rating: FeedbackRating) => {
+    if (submittingFeedback) return;
+    setFeedback(rating);
+    setSubmittingFeedback(true);
+    try {
+      const result = await submitFeedback({
+        answerId: answer.answerId ?? "local-answer",
+        question: answer.question,
+        rating,
+        role,
+        citationsUsed: answer.citations.map((citation) => `${citation.title} • ${citation.section}`),
+        provider: answer.mode,
+      });
+      setNotice(result.submitted ? "Thanks for the feedback." : "Thanks — feedback noted for this demo.");
+    } catch {
+      setNotice("Thanks — feedback noted for this demo.");
+    } finally {
+      setSubmittingFeedback(false);
     }
   };
   return (
@@ -76,10 +98,10 @@ function AnswerBody({ answer, showQuestion = false }: { answer: Answer; showQues
         {answer.citations.filter((citation, index, all) => all.findIndex((item) => item.title === citation.title && item.section === citation.section) === index).map((citation) => <SourceCard key={`${citation.title}-${citation.section}`} citation={citation} />)}
       </div></>}
       <div className="mt-3 flex justify-end gap-1">
-        <span aria-live="polite" className="mr-auto self-center text-xs text-inkmuted">{notice || (feedback ? "Thanks — your feedback was recorded." : "")}</span>
+        <span aria-live="polite" className="mr-auto self-center text-xs text-inkmuted">{notice || (feedback ? "Thanks for the feedback." : "")}</span>
         <ActionIcon label="Copy answer" onClick={() => void copyAnswer()}><svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="8" y="5" width="11" height="15" rx="1" /><path d="M5 16H4V3h11v1" /></svg></ActionIcon>
-        <ActionIcon label="Helpful" active={feedback === "helpful"} onClick={() => setFeedback("helpful")}><svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M7 10v11H3V10zM7 19h10l3-8-1-2h-6l1-6-2-1-5 8" /></svg></ActionIcon>
-        <ActionIcon label="Not helpful" active={feedback === "not-helpful"} onClick={() => setFeedback("not-helpful")}><svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M7 14V3H3v11zM7 5h10l3 8-1 2h-6l1 6-2 1-5-8" /></svg></ActionIcon>
+        <ActionIcon label="Helpful" active={feedback === "helpful"} onClick={() => void sendFeedback("helpful")}><svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M7 10v11H3V10zM7 19h10l3-8-1-2h-6l1-6-2-1-5 8" /></svg></ActionIcon>
+        <ActionIcon label="Not helpful" active={feedback === "not_helpful"} onClick={() => void sendFeedback("not_helpful")}><svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M7 14V3H3v11zM7 5h10l3 8-1 2h-6l1 6-2 1-5-8" /></svg></ActionIcon>
       </div>
     </div>
   );

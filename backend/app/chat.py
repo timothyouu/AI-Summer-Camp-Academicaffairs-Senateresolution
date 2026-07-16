@@ -14,6 +14,7 @@ from .config import get_settings
 from .conflicts import create_or_get_conflict
 from .models import ChatRequest, ChatResponse, Citation, ConflictCreate, ConflictSignal, Role
 from .retrieval import SearchResult, search
+from .stores import recurring_question_store
 
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -201,6 +202,19 @@ def _agent_grounded_answer(result: PipelineResult) -> ChatResponse:
     )
 
 
+def _record_recurring_question(question: str, response: ChatResponse) -> None:
+    """Persist question frequency without allowing storage failures to affect chat."""
+    try:
+        recurring_question_store().record_question(
+            question_text=question,
+            answer_id=response.answer_id,
+            citations=[f"{citation.source} — {citation.section}" for citation in response.citations],
+        )
+    except Exception:
+        # Chat answers remain available when optional application-memory storage is offline.
+        return
+
+
 @router.post("/chat", response_model=ChatResponse)
 def chat(
     payload: ChatRequest,
@@ -211,31 +225,34 @@ def chat(
     role = resolve_request_role(authorization, x_role)
     pipeline = create_pipeline()
     if pipeline.authoritative:
-        return shape_response_for_role(_agent_grounded_answer(pipeline.run(payload.question)), role)
-    fixture = _calibrated(payload.question)
-    if fixture is None:
-        return shape_response_for_role(_local_index_answer(search(payload.question, k=6)), role)
-    pipeline_result = pipeline.run(
-        payload.question,
-        passages=[GroundedPassage(text=excerpt, span=excerpt, source=source, section=section, topic=payload.question) for source, section, excerpt in fixture.citations],
-    )
-    signal: ConflictSignal | None = None
-    if fixture.conflict is not None:
-        source_a, source_b, topic, description = fixture.conflict
-        record = create_or_get_conflict(ConflictCreate(source_a=source_a, source_b=source_b, topic=topic, description=description))
-        signal = ConflictSignal(
-            detected=True,
-            sources=[source_a, source_b],
-            guidance="Review the later source's adoption/effective status and consult Faculty Affairs before relying on superseded wording.",
-            conflict_id=record.id,
-        )
-    return shape_response_for_role(
-        ChatResponse(
-            answer=fixture.answer,
-            citations=_citations(fixture.citations),
-            conflict=signal,
-            mode="calibrated-static",
-            agent_trace=pipeline_result.agent_trace,
-        ),
-        role,
-    )
+        response = _agent_grounded_answer(pipeline.run(payload.question))
+    else:
+        fixture = _calibrated(payload.question)
+        if fixture is None:
+            response = _local_index_answer(search(payload.question, k=6))
+        else:
+            pipeline_result = pipeline.run(
+                payload.question,
+                passages=[GroundedPassage(text=excerpt, span=excerpt, source=source, section=section, topic=payload.question) for source, section, excerpt in fixture.citations],
+            )
+            signal: ConflictSignal | None = None
+            if fixture.conflict is not None:
+                source_a, source_b, topic, description = fixture.conflict
+                record = create_or_get_conflict(ConflictCreate(source_a=source_a, source_b=source_b, topic=topic, description=description))
+                signal = ConflictSignal(
+                    detected=True,
+                    sources=[source_a, source_b],
+                    guidance="Review the later source's adoption/effective status and consult Faculty Affairs before relying on superseded wording.",
+                    conflict_id=record.id,
+                )
+            response = ChatResponse(
+                answer=fixture.answer,
+                citations=_citations(fixture.citations),
+                conflict=signal,
+                mode="calibrated-static",
+                agent_trace=pipeline_result.agent_trace,
+            )
+    # Aggregate before role-shaping so a question records the same citations no
+    # matter who asked it; only the returned copy is narrowed for employees.
+    _record_recurring_question(payload.question, response)
+    return shape_response_for_role(response, role)

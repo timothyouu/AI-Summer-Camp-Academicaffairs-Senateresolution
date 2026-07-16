@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from .auth import require_reviewer
-from .models import ConflictCreate, ConflictRecord, ConflictUpdate
+from .config import get_settings
+from .models import ConflictCreate, ConflictRecord, ConflictStatus, ConflictUpdate
 from .stores import conflict_store
 
 
@@ -16,21 +17,48 @@ DEMO_CONFLICTS = (
 )
 
 
-def list_conflicts() -> list[ConflictRecord]:
-    return conflict_store().list()
+def list_conflicts(status_filter: ConflictStatus | None = None, topic: str | None = None) -> list[ConflictRecord]:
+    records = conflict_store().list()
+    return [
+        record for record in records
+        if (status_filter is None or record.status == status_filter)
+        and (topic is None or record.topic == topic)
+    ]
 
 
-def create_or_get_conflict(payload: ConflictCreate) -> ConflictRecord:
+def create_or_get_conflict(payload: ConflictCreate, origin: str = "manual") -> ConflictRecord:
+    del origin  # The current ConflictLog schema keeps findings idempotent by content.
     return conflict_store().create_or_get(payload)
 
 
 def seed_demo_conflicts() -> list[ConflictRecord]:
+    if get_settings().conflicts_aws:
+        return []
     return [create_or_get_conflict(payload) for payload in DEMO_CONFLICTS]
 
 
+def _parse_conflict_id(conflict_id: str) -> int:
+    try:
+        return int(conflict_id)
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conflict not found") from error
+
+
 @router.get("", response_model=list[ConflictRecord])
-def get_conflicts(_: None = Depends(require_reviewer)) -> list[ConflictRecord]:
-    return list_conflicts()
+def get_conflicts(
+    status_filter: ConflictStatus | None = Query(default=None, alias="status"),
+    topic: str | None = Query(default=None),
+    _: None = Depends(require_reviewer),
+) -> list[ConflictRecord]:
+    return list_conflicts(status_filter=status_filter, topic=topic)
+
+
+@router.get("/{conflict_id}", response_model=ConflictRecord)
+def get_conflict(conflict_id: str, _: None = Depends(require_reviewer)) -> ConflictRecord:
+    record = conflict_store().get(_parse_conflict_id(conflict_id))
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conflict not found")
+    return record
 
 
 @router.post("", response_model=ConflictRecord, status_code=status.HTTP_201_CREATED)
@@ -39,8 +67,8 @@ def create_conflict(payload: ConflictCreate, _: None = Depends(require_reviewer)
 
 
 @router.patch("/{conflict_id}", response_model=ConflictRecord)
-def update_conflict(conflict_id: int, payload: ConflictUpdate, _: None = Depends(require_reviewer)) -> ConflictRecord:
-    record = conflict_store().update(conflict_id, payload)
+def update_conflict(conflict_id: str, payload: ConflictUpdate, _: None = Depends(require_reviewer)) -> ConflictRecord:
+    record = conflict_store().update(_parse_conflict_id(conflict_id), payload)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conflict not found")
     return record

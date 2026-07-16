@@ -44,9 +44,18 @@ const agentBaseUrl = (import.meta.env.VITE_AGENT_BASE_URL ?? "").replace(/\/$/, 
 
 interface BackendCitation { id: number; source: string; section: string; excerpt: string; }
 interface BackendChatResponse {
+  answer_id: string;
   answer: string;
   citations: BackendCitation[];
   conflict: { detected: boolean; guidance: string } | null;
+  mode: "local-index" | "calibrated-static" | "agent-grounded";
+}
+interface BackendFeedbackResponse { feedback_id: string; }
+interface BackendRecurringQuestion {
+  question_id: string;
+  question_text: string;
+  topic: string;
+  ask_count: number;
 }
 interface BackendResolutionFinding { source: string; section: string; description: string; }
 interface BackendResolutionResponse {
@@ -65,7 +74,7 @@ interface BackendAgentTrace {
   citations?: BackendCitation[] | null;
 }
 interface BackendConflict {
-  id: number;
+  id: string | number;
   source_a: string;
   source_b: string;
   topic: string;
@@ -211,6 +220,14 @@ export async function login(role: Role): Promise<LoginResult> {
 
 const normalizeQuestion = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
+const localAnswerId = (question: string): string => {
+  let hash = 2166136261;
+  for (let index = 0; index < question.length; index += 1) {
+    hash = Math.imul(hash ^ question.charCodeAt(index), 16777619);
+  }
+  return `local-${(hash >>> 0).toString(36)}`;
+};
+
 const questionRoutes: ReadonlyArray<{ id: keyof typeof conversationAnswers; terms: string[] }> = [
   { id: "ferp-rtp-service", terms: ["ferp faculty member serve", "ferp rtp committee", "ferp committee service"] },
   { id: "ferp-additional-employment", terms: ["additional employment", "summer employment", "other employment during ferp", "accept summer"] },
@@ -232,6 +249,8 @@ const questionRoutes: ReadonlyArray<{ id: keyof typeof conversationAnswers; term
 
 const cloneAnswer = (answer: Answer, question = answer.question): Answer => ({
   ...answer,
+  answerId: answer.answerId ?? localAnswerId(question),
+  mode: answer.mode ?? "calibrated-static",
   question,
   paragraphs: [...answer.paragraphs],
   citations: answer.citations.map((citation) => ({ ...citation })),
@@ -263,6 +282,8 @@ export async function askQuestion(text: string, role: Role = "reviewer"): Promis
   if (backend !== null) {
     const paragraphs = backend.answer.split(/\n\s*\n/).filter(Boolean);
     return {
+      answerId: backend.answer_id,
+      mode: backend.mode,
       question,
       heading: paragraphs[0]?.split(/[.!?]\s/)[0] ?? "Grounded policy response",
       paragraphs,
@@ -278,6 +299,8 @@ export async function askQuestion(text: string, role: Role = "reviewer"): Promis
     return cloneAnswer(conversationAnswers[route], question);
   }
   return {
+    answerId: localAnswerId(question),
+    mode: "calibrated-static",
     question,
     heading: "This question is outside the calibrated static demo",
     paragraphs: [
@@ -285,6 +308,67 @@ export async function askQuestion(text: string, role: Role = "reviewer"): Promis
     ],
     citations: [],
   };
+}
+
+export type FeedbackRating = "helpful" | "not_helpful";
+
+export interface FeedbackSubmission {
+  answerId: string;
+  question: string;
+  rating: FeedbackRating;
+  role?: Role;
+  citationsUsed?: string[];
+  provider?: Answer["mode"];
+}
+
+export interface FeedbackSubmissionResult {
+  submitted: boolean;
+  feedbackId?: string;
+}
+
+export interface RecurringQuestion {
+  questionId: string;
+  questionText: string;
+  topic: string;
+  askCount: number;
+}
+
+const fallbackRecurringQuestions: ReadonlyArray<RecurringQuestion> = [
+  { questionId: "demo-service-credit", questionText: "Does service credit count toward the tenure clock?", topic: "general", askCount: 0 },
+  { questionId: "demo-rtp", questionText: "What is the RTP process?", topic: "general", askCount: 0 },
+  { questionId: "demo-gecco", questionText: "What is the GECCo Committee?", topic: "general", askCount: 0 },
+  { questionId: "demo-accessibility", questionText: "Where can I find accessibility policy?", topic: "general", askCount: 0 },
+];
+
+export async function getRecurringQuestions(topic?: string, limit = 4): Promise<RecurringQuestion[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (topic) params.set("topic", topic);
+  const result = await backendRequest<BackendRecurringQuestion[]>(`/api/recurring-questions?${params.toString()}`);
+  if (result !== null && result.length > 0) {
+    return result.map((question) => ({
+      questionId: question.question_id,
+      questionText: question.question_text,
+      topic: question.topic,
+      askCount: question.ask_count,
+    }));
+  }
+  return fallbackRecurringQuestions.slice(0, limit).map((question) => ({ ...question }));
+}
+
+export async function submitFeedback(input: FeedbackSubmission): Promise<FeedbackSubmissionResult> {
+  const result = await backendRequest<BackendFeedbackResponse>("/api/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      answer_id: input.answerId,
+      question: input.question,
+      rating: input.rating,
+      role: input.role,
+      citations_used: input.citationsUsed ?? [],
+      provider: input.provider,
+    }),
+  });
+  return result === null ? { submitted: false } : { submitted: true, feedbackId: result.feedback_id };
 }
 
 export async function getConversation(conversationId: string): Promise<Answer> {
@@ -438,12 +522,15 @@ export async function resolveConflict(slug: string, note: string): Promise<Confl
   const conflict = mergePersistedConflicts().find((item) => item.slug === slug);
   if (note.trim().length === 0) throw new Error("A resolution note is required.");
   if (slug.startsWith("local-api-")) {
-    const conflictId = Number(slug.replace("local-api-", ""));
-    const backend = await backendRequest<BackendConflict>(`/api/conflicts/${conflictId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "Resolved", resolution_note: note.trim() }),
-    });
+    const conflictId = slug.replace("local-api-", "");
+    const backend = await backendRequest<BackendConflict>(
+      `/api/conflicts/${encodeURIComponent(conflictId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "Resolved", resolution_note: note.trim() }),
+      },
+    );
     if (backend !== null) return { slug, topic: backend.topic, sources: `${backend.source_a} ↔ ${backend.source_b}`, owner: "Faculty Affairs", status: backend.status, detected: new Date(backend.created_at).toLocaleDateString() };
   }
   await delay();

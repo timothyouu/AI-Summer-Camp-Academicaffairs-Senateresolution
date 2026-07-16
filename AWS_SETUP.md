@@ -35,6 +35,22 @@ by default). The production model ID remains an explicit deployment choice.
 
 ## 2. Deploy the stack
 
+`cdk deploy` below creates every DynamoDB table itself, so the scripts are not a
+prerequisite for it. Use them when you want to provision or health-check
+DynamoDB **on its own** — standing up the full stack also creates an OpenSearch
+Serverless collection and a Bedrock Knowledge Base, which is slow and costly to
+spin up just to exercise persistence:
+
+```bash
+./scripts/setup_dynamodb_tables.sh    # idempotent; never deletes a table
+./scripts/verify_dynamodb_tables.sh   # ACTIVE + write/delete healthcheck + GSIs
+```
+
+If setup reports a key-schema mismatch, that table is left over from the
+app-memory round and the backend cannot read it — the script prints the scan and
+delete commands rather than changing anything itself. See the integration note in
+`Yaza_DynamoDB_Work_Summary.md`.
+
 ```bash
 source backend/.venv/bin/activate
 cd infra

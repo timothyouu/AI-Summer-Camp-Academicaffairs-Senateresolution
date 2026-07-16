@@ -1,10 +1,10 @@
 # Policy Intelligence Assistant
 
-A customer-ready local demo for exploring CSUB academic policy, asking source-grounded questions, checking draft resolutions, recording conflicts, browsing topics, and uploading PDF/Markdown/text sources. The retrieval layer uses deterministic local embeddings; AWS Bedrock retrieval and generation are intentionally outside this implementation.
+A customer-ready policy assistant for exploring CSUB academic policy, asking source-grounded questions, checking draft resolutions, recording conflicts, browsing topics, and uploading PDF/Markdown/text sources. It runs with deterministic local retrieval and SQLite by default; environment variables activate Bedrock, DynamoDB, S3, Cognito, and the Strands agent pipeline without changing API contracts.
 
 ## Run locally
 
-From the repository root in WSL:
+From the repository root:
 
 ```bash
 python3 -m venv backend/.venv
@@ -27,6 +27,92 @@ Open `http://localhost:5173`. The role cards use these demo accounts through the
 - Policy reviewer: `reviewer@campus.edu` / `demo123`
 
 API documentation is available at `http://localhost:8000/docs`; health is at `http://localhost:8000/api/health`.
+
+## DynamoDB setup
+
+The main AWS stack owns its conflict and upload tables. Five additional
+application-memory tables contributed by Yaza are retained outside the stack so
+the existing data is not replaced: feedback, recurring questions, access
+control, source registry, and draft versions. The CDK stack imports those table
+names, grants the API Lambda access, and injects their `DDB_*` settings.
+
+Local development can continue to use SQLite with
+`APP_PERSISTENCE_BACKEND=sqlite`. Production/final deployments must set
+`APP_ENV=production` and `APP_PERSISTENCE_BACKEND=dynamodb`; the backend rejects
+any production configuration that selects SQLite.
+
+Use these settings for DynamoDB mode:
+
+```bash
+export AWS_PROFILE=csub-policy
+export AWS_REGION=us-west-2
+export APP_ENV=production
+export APP_PERSISTENCE_BACKEND=dynamodb
+export DYNAMODB_CONFLICTS_TABLE=policy-intelligence-conflicts
+export DYNAMODB_FEEDBACK_TABLE=policy-intelligence-feedback
+export DYNAMODB_RECURRING_QUESTIONS_TABLE=policy-intelligence-recurring-questions
+export DYNAMODB_ACCESS_CONTROL_TABLE=policy-intelligence-access-control
+export DYNAMODB_SOURCE_REGISTRY_TABLE=policy-intelligence-source-registry
+export DYNAMODB_DRAFT_VERSIONS_TABLE=policy-intelligence-draft-versions
+
+./scripts/setup_dynamodb_tables.sh
+./scripts/verify_dynamodb_tables.sh
+```
+
+The setup script is idempotent: it creates only missing tables, including the
+required GSIs for new tables, waits for them to become active, and never deletes
+tables. The verification script checks every table and required GSI, performs a
+conditional healthcheck write, and deletes only the item it just created.
+
+For manual setup, create the conflict table outside the app. Use the setup
+script above for the complete six-table configuration:
+
+```bash
+aws dynamodb create-table \
+  --table-name policy-intelligence-conflicts \
+  --attribute-definitions AttributeName=conflict_id,AttributeType=S \
+  --key-schema AttributeName=conflict_id,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --region us-west-2
+```
+
+The answer-feedback API uses `DYNAMODB_FEEDBACK_TABLE` when DynamoDB is selected.
+Create that table outside the app as well:
+
+```bash
+aws dynamodb create-table \
+  --table-name policy-intelligence-feedback \
+  --attribute-definitions AttributeName=feedback_id,AttributeType=S \
+  --key-schema AttributeName=feedback_id,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --region us-west-2
+```
+
+Recurring-question tracking uses `DYNAMODB_RECURRING_QUESTIONS_TABLE` when
+DynamoDB is selected. Create that table outside the app as well:
+
+```bash
+aws dynamodb create-table \
+  --table-name policy-intelligence-recurring-questions \
+  --attribute-definitions AttributeName=question_id,AttributeType=S \
+  --key-schema AttributeName=question_id,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST \
+  --region us-west-2
+```
+
+The DynamoDB list operations use table scans because this is a small
+demo-scale deployment; add appropriate GSIs before using this access pattern
+at larger scale.
+
+Set `APP_PERSISTENCE_BACKEND=dynamodb` only after the required tables and AWS
+credentials or profile are available. The backend uses boto3's standard
+credential provider chain (AWS CLI profile, SSO, or IAM role); credentials must
+not be committed to this repo.
+
+Run the setup script before exercising application-memory routes in AWS or
+deploying a stack that expects the imported tables. Access-control,
+source-registry, and draft-version APIs remain follow-up work; this integration
+preserves their provisioned schemas for those features.
 
 ## Demo integrity
 
