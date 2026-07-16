@@ -1,0 +1,27 @@
+[
+    {
+        "id": 1,
+        "question": "What policy governs faculty workload?",
+        "expected_behavior": "Find the relevant policy and cite the source."
+    },
+    {
+        "id": 2,
+        "question": "The Faculty Handbook and CBA contain conflicting information. How should this be handled?",
+        "expected_behavior": "Identify the conflict and recommend escalation."
+    },
+    {
+        "id": 3,
+        "question": "What policies exist related to accessibility requirements?",
+        "expected_behavior": "Locate relevant policy topics."
+    },
+    {
+        "id": 4,
+        "question": "Are there existing policies that overlap with creating a new academic department?",
+        "expected_behavior": "Find related policies and detect possible duplicates."
+    },
+    {
+        "id": 5,
+        "question": "Where can employees find information about university procedures?",
+        "expected_behavior": "Provide a helpful answer with source references."
+    }
+]
