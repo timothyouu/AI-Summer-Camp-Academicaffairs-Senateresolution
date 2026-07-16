@@ -79,7 +79,9 @@ class AgentPipeline:
 
     @staticmethod
     def _retrieve(topic: str) -> list[GroundedPassage]:
-        return [AgentPipeline._passage(item) for item in search(topic, k=10)]
+        # Wide k so both sides of a divergence can be compared; a narrow top-k
+        # returns one source and variance can never fire (lambdaspec.md §6-7).
+        return [AgentPipeline._passage(item) for item in search(topic, k=12)]
 
     @staticmethod
     def _passage(item: SearchResult) -> GroundedPassage:

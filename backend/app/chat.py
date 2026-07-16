@@ -7,11 +7,12 @@ from fastapi import APIRouter, Depends, Header
 
 from .agents import GroundedPassage, PipelineResult, create_pipeline
 from .agents.pipeline import ESCALATION
+from .agents.variance import detect_variance, log_variance, soft_language
 from .auth import request_role, require_authenticated
 from .conflicts import create_or_get_conflict
 from .models import ChatRequest, ChatResponse, Citation, ConflictCreate, ConflictSignal, Role
 from .retrieval import SearchResult, search
-from .stores import recurring_question_store
+from .stores import ConflictStore, recurring_question_store
 
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -162,7 +163,9 @@ def _local_index_answer(results: list[SearchResult]) -> ChatResponse:
     )
 
 
-def _agent_grounded_answer(result: PipelineResult) -> ChatResponse:
+def _agent_grounded_answer(
+    result: PipelineResult, question: str, store: ConflictStore | None = None,
+) -> ChatResponse:
     claims = result.claims[:6]
     passage_links = {
         (passage.source, passage.section): (passage.canonical_url, passage.section_url)
@@ -177,7 +180,6 @@ def _agent_grounded_answer(result: PipelineResult) -> ChatResponse:
         for index, claim in enumerate(claims, start=1)
         if claim.source != "Submitted draft"
     ]
-    accepted = [item for item in result.verified_conflicts if item.accepted]
     if claims:
         statements = "\n\n".join(
             f"{claim.citation_span} ({claim.source}, {claim.section})"
@@ -186,17 +188,21 @@ def _agent_grounded_answer(result: PipelineResult) -> ChatResponse:
         answer = f"The agent pipeline verified these grounded policy statements:\n\n{statements}"
     else:
         answer = "The agent pipeline could not extract a grounded policy claim from the retrieved passages, so it abstained."
+
+    # Re-label the pipeline's verified output with soft "policy variance"
+    # language (lambdaspec.md §7-9). The pipeline itself is unchanged.
+    report = detect_variance(question, result)
     signal: ConflictSignal | None = None
-    if accepted:
-        sources = sorted({
-            claim.source
-            for item in accepted
-            for claim in (item.analysis.claim_a, item.analysis.claim_b)
-            if claim is not None
-        })
-        guidance = result.escalation or "Multiple grounded answers require human policy review."
-        signal = ConflictSignal(detected=True, sources=sources, guidance=guidance)
-        answer = f"{answer}\n\n{guidance}"
+    if report.variance_detected:
+        conflict_ids = log_variance(report, store=store)
+        sources = sorted({item.source_a for item in report.items} | {item.source_b for item in report.items})
+        signal = ConflictSignal(
+            detected=True,
+            sources=sources,
+            guidance=soft_language(report, "reviewer"),
+            conflict_id=conflict_ids[0] if conflict_ids else None,
+        )
+        answer = f"{answer}\n\n{report.soft_summary}\n\n{report.escalation}"
     elif result.abstained and result.escalation:
         answer = f"{answer}\n\n{result.escalation}"
     return ChatResponse(
@@ -252,11 +258,13 @@ def chat(
     role = resolve_request_role(authorization, x_role)
     pipeline = create_pipeline()
     if pipeline.authoritative:
-        response = _agent_grounded_answer(pipeline.run(payload.question))
+        response = _agent_grounded_answer(pipeline.run(payload.question), payload.question)
     else:
         fixture = _calibrated(payload.question)
         if fixture is None:
-            response = _local_index_answer(search(payload.question, k=6))
+            # Wide k so both sides of a divergence enter the same result set;
+            # a narrow top-k surfaces one source and misses variance (lambdaspec.md §6-7).
+            response = _local_index_answer(search(payload.question, k=12))
         else:
             pipeline_result = pipeline.run(
                 payload.question,
