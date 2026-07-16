@@ -2,7 +2,7 @@
 
 Companion to `implementation.md` (local demo) and `implementation2.md` (AWS migration plan, Phases A–D). This doc is the one-stop reference for **every teammate** to get access to the shared AWS account and stand up their own copy of, or contribute to, the services in the target architecture: S3, Bedrock (models + Knowledge Bases + Guardrails), OpenSearch Serverless, DynamoDB, Cognito, Lambda, API Gateway, Amplify, EventBridge, and the IAM permissions tying them together.
 
-**Honesty check before you read further:** as of 2026-07-16, nothing described below is provisioned. `aws sts get-caller-identity` fails with `NoCredentials` on Tim's machine — there are no credentials, no region set, and no Bedrock model access requested anywhere on the account yet. Every ARN, account ID, and resource name in this doc is a `<placeholder>` — do not copy-paste anything here expecting it to resolve. This is the guide for going from zero to working, together.
+**Honesty check before you read further:** `aws sts get-caller-identity` still fails with `NoCredentials` on Tim's machine — there are no credentials configured here, and nothing in this doc has been verified live from this repo. That part hasn't changed. What has changed: as of 2026-07-16, Alyssa's `feature/rag` branch (merged into `prod` as `backend/rag/`, see its README) carries two real-looking Knowledge Base IDs — `HHFJ4IDG9M` (academic) and `87GR7ILJEF` (senate), both `us-west-2` — plus the exact Claude model id §3 recommends (`us.anthropic.claude-sonnet-4-5-20250929-v1:0`) hardcoded as a working default. That's evidence someone on the team has at least partly completed §3 (model access) and §4 (KB creation) on the shared account. It is **not** confirmation from Tim's machine — no credentials here means no way to run the verify commands below and check. Treat those two IDs as "probably real, provisioned by Alyssa," not "confirmed live." Every ARN, account ID, and resource name elsewhere in this doc that isn't one of those two IDs is still a `<placeholder>` — do not copy-paste anything else here expecting it to resolve. This is the guide for going from zero to working, together.
 
 **Region decision: `us-west-2` for everything.** Every resource in this doc — S3 buckets, Bedrock model access, Knowledge Bases, OpenSearch Serverless collections, DynamoDB tables, Cognito user pool, Lambda, API Gateway, Amplify backend, Guardrails, EventBridge rules — goes in `us-west-2`. Bedrock foundation-model access and Knowledge Bases are region-scoped; mixing regions is the single most common cause of "it worked in the console but my CLI call fails."
 
@@ -254,6 +254,13 @@ A populated `/tmp/claude-out.json` with a `content` array means Claude invoke ac
 ## 4. Bedrock Knowledge Bases + OpenSearch Serverless (vector store)
 
 **Purpose:** replaces the local NumPy index — managed chunking, embedding, and retrieval over the S3 corpus bucket.
+
+**See also:** `backend/rag/README.md` documents Alyssa's Bedrock RAG spike, which already has two
+provisioned-looking Knowledge Base IDs (see the honesty check at the top of this doc) and a
+working config pattern for pointing scripts at a KB. It's a standalone verification harness, not
+the app's retrieval path (that's `backend/app/retrieval.py`, one KB via `BEDROCK_KB_ID`) — but if
+you're setting up KB access for the first time, its README and `config.py` defaults are a useful
+second data point alongside the steps below.
 
 **Setup (console is genuinely easier here — KB creation has several linked sub-resources the console wizard wires up for you):**
 1. Bedrock console (region `us-west-2`) → Knowledge Bases → Create.
