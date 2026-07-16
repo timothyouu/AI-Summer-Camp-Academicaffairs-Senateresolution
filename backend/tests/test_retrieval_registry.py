@@ -58,7 +58,7 @@ def test_bedrock_filename_matches_registry_s3_key() -> None:
         title="Policy (2024 Catalog)",
         source_type="catalog",
         status="archived",
-        s3_key="raw/catalog/2024/catalog-2024-policy.md",
+        s3_key="corpus/raw/catalog/2024/catalog-2024-policy.md",
     ))
     kept = apply_registry_policy([_result("catalog-2024-policy.md", 0.9)], k=8)
     assert kept == []

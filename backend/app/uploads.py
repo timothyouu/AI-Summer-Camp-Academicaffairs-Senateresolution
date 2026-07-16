@@ -50,7 +50,7 @@ async def upload(
         import boto3  # type: ignore[import-not-found]
         client = boto3.client("s3", region_name=settings.aws_region)
         upload_id = str(uuid4())
-        key = f"uploads/{upload_id}/{filename}"
+        key = f"corpus/uploads/{upload_id}/{filename}"
         url = client.generate_presigned_url(
             "put_object", Params={"Bucket": settings.corpus_bucket, "Key": key, "ContentType": file.content_type or "application/octet-stream"},
             ExpiresIn=900,
@@ -59,7 +59,7 @@ async def upload(
         from .registry import registry_store
         registry_store().upsert(SourceUpsert(
             id=Path(filename).stem.lower(), title=Path(filename).stem, source_type="uploads",
-            status="archived", s3_key=f"uploads/{upload_id}/{filename}",
+            status="archived", s3_key=key,
         ))
         return UploadResponse(filename=filename, status="pending", chunks_added=0, upload_url=str(url))
     content = await file.read(MAX_UPLOAD_BYTES + 1)
@@ -121,11 +121,11 @@ async def presign_upload(
         from .registry import registry_store
         registry_store().upsert(SourceUpsert(
             id=Path(filename).stem.lower(), title=Path(filename).stem, source_type="uploads",
-            status="archived", s3_key=f"uploads/{upload_id}/{filename}",
+            status="archived", s3_key=f"corpus/uploads/{upload_id}/{filename}",
         ))
         import boto3  # type: ignore[import-not-found]
         upload_url = boto3.client("s3", region_name=settings.aws_region).generate_presigned_url(
-            "put_object", Params={"Bucket": settings.corpus_bucket, "Key": f"uploads/{upload_id}/{filename}", "ContentType": payload.content_type}, ExpiresIn=900,
+            "put_object", Params={"Bucket": settings.corpus_bucket, "Key": f"corpus/uploads/{upload_id}/{filename}", "ContentType": payload.content_type}, ExpiresIn=900,
         )
         return PresignedUploadResponse(upload_id=upload_id, upload_url=str(upload_url), headers={"Content-Type": payload.content_type})
     upload_id = upload_store().register(filename, "pending", upload_id=filename)

@@ -31,8 +31,14 @@ def create_or_get_conflict(payload: ConflictCreate, origin: str = "manual") -> C
     return conflict_store().create_or_get(payload)
 
 
-def seed_demo_conflicts() -> list[ConflictRecord]:
-    if get_settings().conflicts_aws:
+def seed_demo_conflicts(*, allow_aws: bool = False) -> list[ConflictRecord]:
+    """Seed the demo findings idempotently.
+
+    Application startup keeps AWS seeding disabled so a deployed Lambda cannot
+    create demo records implicitly. The explicit deployment seed command opts
+    in and uses the same content-addressed store path as API-created findings.
+    """
+    if get_settings().conflicts_aws and not allow_aws:
         return []
     return [create_or_get_conflict(payload) for payload in DEMO_CONFLICTS]
 

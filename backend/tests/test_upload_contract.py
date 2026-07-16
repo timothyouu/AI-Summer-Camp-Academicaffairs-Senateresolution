@@ -70,7 +70,7 @@ def test_aws_presign_and_pending_status_use_lazy_boto3(client: TestClient, monke
     }
     assert s3.calls == [{
         "operation": "put_object",
-        "Params": {"Bucket": "policy-corpus", "Key": f"uploads/{upload_id}/handbook.pdf", "ContentType": "application/pdf"},
+        "Params": {"Bucket": "policy-corpus", "Key": f"corpus/uploads/{upload_id}/handbook.pdf", "ContentType": "application/pdf"},
         "ExpiresIn": 900,
     }]
     status = client.get(f"/api/uploads/{upload_id}")
@@ -100,8 +100,8 @@ def test_aws_presigns_same_filename_with_unique_ids_and_keys(client: TestClient,
 
     assert first["upload_id"] != second["upload_id"]
     assert s3.keys == [
-        f"uploads/{first['upload_id']}/policy.pdf",
-        f"uploads/{second['upload_id']}/policy.pdf",
+        f"corpus/uploads/{first['upload_id']}/policy.pdf",
+        f"corpus/uploads/{second['upload_id']}/policy.pdf",
     ]
     store = SQLiteUploadStore()
     assert store.get(first["upload_id"]).filename == "policy.pdf"  # type: ignore[union-attr]
