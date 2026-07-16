@@ -125,6 +125,30 @@ def _seed_id(path: Path) -> str:
     return path.stem.lower()
 
 
+VALID_SOURCE_TYPES = {"handbook", "cba", "policystat", "catalog", "uploads"}
+
+# Corpus front matter carries human-readable descriptions ("handbook excerpt"),
+# not the retrieval taxonomy, and PDFs carry none. This mirrors the AWS-side
+# authority in infra/scripts/prepare_corpus.py (CORPUS_SOURCES) so the local
+# Sources page types the Handbook/CBA/etc. the same way a real deploy does. Keep
+# the two in step: if a corpus file's type changes there, change it here too.
+_SEED_TYPE_BY_STEM: dict[str, str] = {
+    "csub university_handbook_2025": "handbook",
+    "unit 3 cba 2022-2026": "cba",
+    "a guide to calpers employment after retirement": "cba",
+    "csub-ferp-faq-extract": "cba",
+    "synthetic-appendix-ati-accessibility": "handbook",
+    "synthetic-handbook-gecco": "policystat",
+    "synthetic-handbook-service-credit": "handbook",
+    "synthetic-procedures-schools-departments": "policystat",
+    "synthetic-resolution-ai-policy": "policystat",
+}
+
+
+def _seed_source_type(path: Path) -> str:
+    return _SEED_TYPE_BY_STEM.get(_seed_id(path), "uploads")
+
+
 def register_document(path: Path, *, status: SourceLifecycleStatus, source_type: str | None = None,
                       canonical_url: str = "", edition_year: int | None = None, is_current: bool = True,
                       passages: int = 0) -> SourceRecord:
@@ -170,7 +194,11 @@ def seed_registry_from_corpus() -> None:
     """Seeds start active; anything under uploads/ starts archived (locked decision)."""
     for path in discover_corpus_files(CORPUS_DIR):
         in_uploads = UPLOAD_DIR in path.parents or path.parent == UPLOAD_DIR
-        register_document(path, status="archived" if in_uploads else "active")
+        register_document(
+            path,
+            status="archived" if in_uploads else "active",
+            source_type=None if in_uploads else _seed_source_type(path),
+        )
 
 
 @router.get("", response_model=list[SourceRecord])

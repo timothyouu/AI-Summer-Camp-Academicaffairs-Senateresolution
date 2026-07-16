@@ -49,6 +49,24 @@ def test_seed_marks_uploads_archived(tmp_path, monkeypatch) -> None:
     assert records["late-upload"].status == "archived"
 
 
+def test_seed_types_known_corpus_by_taxonomy_not_uploads() -> None:
+    # The Handbook/CBA corpus files carry human-readable front matter
+    # ("handbook excerpt") or none at all (PDFs); seeding must still type them
+    # with the retrieval taxonomy, matching the AWS prepare_corpus mapping,
+    # rather than silently degrading everything to "uploads".
+    from backend.app.config import CORPUS_DIR, ensure_data_directories
+    ensure_data_directories()
+    (CORPUS_DIR / "synthetic-handbook-service-credit.md").write_text(
+        "---\ntitle: CSUB University Handbook 2025\nsource_type: handbook excerpt\n---\nBody.",
+        encoding="utf-8",
+    )
+    (CORPUS_DIR / "Unit 3 CBA 2022-2026.pdf").write_bytes(b"%PDF-1.4 test")
+    seed_registry_from_corpus()
+    records = {record.id: record for record in registry_store().list()}
+    assert records["synthetic-handbook-service-credit"].source_type == "handbook"
+    assert records["unit 3 cba 2022-2026"].source_type == "cba"
+
+
 def test_seed_preserves_existing_catalog_edition_metadata() -> None:
     from backend.app.config import CORPUS_DIR, ensure_data_directories
 
