@@ -314,7 +314,7 @@ const questionRoutes: ReadonlyArray<{ id: keyof typeof conversationAnswers; term
   { id: "emeriti-status", terms: ["emeriti", "emeritus"] },
   { id: "rtp-rebuttal-window", terms: ["rebut an rtp", "rebuttal window", "seven day response", "promotion review procedures"] },
   { id: "rtp-committee", terms: ["unit rtp committee", "who may serve", "rtp committee eligibility"] },
-  { id: "service-credit", terms: ["service credit", "prior service", "tenure clock", "unit 3 cba article 13"] },
+  { id: "service-credit", terms: ["service credit", "prior service", "tenure clock", "unit 3 cba article 13", "credit toward tenure", "previous employment", "probationary faculty"] },
   { id: "workload-overview", terms: ["workload", "faculty workload", "assigned responsibilities"] },
   { id: "accessibility-overview", terms: ["accessibility", "instructional technology", "accessible technology", "accessibility exception", "equally effective alternative", "instructional materials accessibility"] },
   { id: "gecco-overview", terms: ["gecco", "general education curriculum committee"] },
@@ -357,6 +357,12 @@ export async function askQuestion(text: string, role: Role = "reviewer"): Promis
       ...cloneAnswer(conversationAnswers["service-credit"], question),
       advisoryNotice: "This guidance can depend on the specifics of your appointment, so treat it as a starting point rather than a final determination. Before you rely on it, please consult your dean, the Provost's office, or the appropriate office to confirm how it applies to your situation.",
     };
+  }
+  // Demo-only: the probationary-tenure-credit question always returns the static
+  // service-credit answer with its two hard-coded sources, bypassing the backend
+  // so both the prose and the cited sources are guaranteed for every role.
+  if (/credit toward tenure|previous employment|probationary faculty/i.test(question)) {
+    return cloneAnswer(conversationAnswers["service-credit"], question);
   }
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (import.meta.env.VITE_USE_COGNITO !== "true") headers["X-Role"] = role;
