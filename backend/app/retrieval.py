@@ -8,7 +8,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import numpy as np
 
-from .config import INDEX_DIR, get_settings
+from .config import INDEX_DIR, bedrock_client_config, get_settings
 from .llm import EMBEDDING_DIMENSION, embed_texts
 from .models import SourceRecord
 
@@ -160,18 +160,57 @@ def search(query: str, k: int = 8) -> list[SearchResult]:
     return apply_registry_policy(fetched, k)
 
 
+def _managed_kb_validation_error(error: Exception) -> bool:
+    """True only for the specific 'managed KB needs managedSearchConfiguration' error.
+
+    Keyed off the message text AWS returns for that ValidationException so that
+    unrelated ValidationExceptions (bad KB id, throttling, etc.) still propagate.
+    """
+    if error.__class__.__name__ != "ValidationException":
+        return False
+    message = str(error).lower()
+    return "managed knowledge base" in message or "managedsearchconfiguration" in message
+
+
+def _retrieval_configuration(mode: str, k: int) -> dict[str, object]:
+    """Build the retrieve() retrievalConfiguration for the selected KB search mode."""
+    if mode == "managed":
+        return {"managedSearchConfiguration": {"numberOfResults": max(1, k)}}
+    return {"vectorSearchConfiguration": {"numberOfResults": max(1, k)}}
+
+
 def _search_knowledge_base(query: str, k: int) -> list[SearchResult]:
     settings = get_settings()
     if not settings.retrieval_aws:
         return []
     import boto3  # type: ignore[import-not-found]  # Lazy: absent in local mode.
 
-    client = boto3.client("bedrock-agent-runtime", region_name=settings.aws_region)
-    response = client.retrieve(
-        knowledgeBaseId=settings.bedrock_kb_id,
-        retrievalQuery={"text": query},
-        retrievalConfiguration={"vectorSearchConfiguration": {"numberOfResults": max(1, k)}},
+    client = boto3.client(
+        "bedrock-agent-runtime", region_name=settings.aws_region,
+        config=bedrock_client_config(settings),
     )
+    mode = settings.bedrock_kb_search_mode if settings.bedrock_kb_search_mode in ("vector", "managed") else "vector"
+
+    def _retrieve(configuration_mode: str) -> dict[str, object]:
+        return client.retrieve(
+            knowledgeBaseId=settings.bedrock_kb_id,
+            retrievalQuery={"text": query},
+            retrievalConfiguration=_retrieval_configuration(configuration_mode, k),
+        )
+
+    try:
+        response = _retrieve(mode)
+    except Exception as error:  # noqa: BLE001 — re-raised unless it is the one recoverable case.
+        # Vector config against a managed KB fails with a specific ValidationException;
+        # retry once with managedSearchConfiguration. Any other error propagates.
+        if mode == "vector" and _managed_kb_validation_error(error):
+            logging.getLogger(__name__).warning(
+                "Bedrock KB rejected vectorSearchConfiguration as managed; retrying with "
+                "managedSearchConfiguration. Set BEDROCK_KB_SEARCH_MODE=managed to skip this retry."
+            )
+            response = _retrieve("managed")
+        else:
+            raise
     results: list[SearchResult] = []
     for item in response.get("retrievalResults", []):
         metadata = item.get("metadata", {})

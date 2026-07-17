@@ -185,7 +185,8 @@ export function setDemoIdentity(role: Role): void {
 
 const backendRequest = async <T>(path: string, init?: RequestInit, timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS, baseUrl: string = apiBaseUrl): Promise<T | null> => {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  let timedOut = false;
+  const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   try {
     const authorizationToken = await getCognitoAuthorizationToken();
     const headers = new Headers(init?.headers);
@@ -193,10 +194,24 @@ const backendRequest = async <T>(path: string, init?: RequestInit, timeoutMs: nu
     const demoEmail = window.localStorage.getItem(DEMO_EMAIL_STORAGE_KEY);
     if (authorizationToken === null && demoEmail !== null) headers.set("X-User-Email", demoEmail);
     const response = await fetch(`${baseUrl}${path}`, { ...init, headers, signal: controller.signal });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      // A backend/gateway error (500/502/504) is otherwise indistinguishable
+      // from a genuine "no data" and silently becomes a mock answer downstream.
+      // Log the status so a live failure is diagnosable in devtools.
+      console.error(`[api] ${init?.method ?? "GET"} ${path} -> HTTP ${response.status} ${response.statusText}; falling back.`);
+      return null;
+    }
     return await response.json() as T;
   } catch (error) {
     if (error instanceof CognitoSessionExpiredError) throw error;
+    // Distinguish a client-side timeout (AbortController fired) from a real
+    // network error. Both currently collapse to a silent mock fallback, which
+    // hides the true cause — so name it explicitly.
+    if (timedOut) {
+      console.error(`[api] ${init?.method ?? "GET"} ${path} timed out after ${timeoutMs}ms; falling back.`);
+    } else {
+      console.error(`[api] ${init?.method ?? "GET"} ${path} failed (network/abort):`, error);
+    }
     return null;
   } finally {
     window.clearTimeout(timeout);
@@ -339,11 +354,19 @@ export async function askQuestion(text: string, role: Role = "reviewer"): Promis
   }, AGENT_REQUEST_TIMEOUT_MS, agentBaseUrl);
   if (backend !== null) {
     const paragraphs = backend.answer.split(/\n\s*\n/).filter(Boolean);
+    const heading = paragraphs[0]?.split(/[.!?]\s/)[0] ?? "Grounded policy response";
+    // The heading is the first sentence of the answer; strip that sentence from
+    // the body so it isn't shown twice (once as the headline, once as body text).
+    if (paragraphs[0] !== undefined) {
+      const remainder = paragraphs[0].slice(heading.length).replace(/^[.!?]\s*/, "").trim();
+      if (remainder) paragraphs[0] = remainder;
+      else paragraphs.shift();
+    }
     return {
       answerId: backend.answer_id,
       mode: backend.mode,
       question,
-      heading: paragraphs[0]?.split(/[.!?]\s/)[0] ?? "Grounded policy response",
+      heading,
       paragraphs,
       citations: backend.citations.map((citation) => ({
         id: citation.id,
@@ -353,6 +376,23 @@ export async function askQuestion(text: string, role: Role = "reviewer"): Promis
         sectionUrl: citation.section_url,
       })),
       ...(backend.conflict?.detected ? { conflictBanner: `Policy conflict — ${backend.conflict.guidance}` } : {}),
+    };
+  }
+  // When a live backend is configured, /api/chat never legitimately returns
+  // "nothing" — it answers or errors. So a null here means the request failed
+  // (timeout / 5xx / network, already logged in backendRequest). Surfacing the
+  // mock "outside the calibrated demo" answer here would silently mask that
+  // failure as if the question were simply unsupported. Report it instead.
+  if (hasConfiguredApi) {
+    return {
+      answerId: localAnswerId(question),
+      mode: "agent-grounded",
+      question,
+      heading: "The assistant could not complete this request",
+      paragraphs: [
+        "The policy assistant did not return an answer in time. This is a backend or connection issue, not a limit on the question itself. Please try again; if it persists, check the server logs (a timeout or Bedrock error will be recorded there).",
+      ],
+      citations: [],
     };
   }
   await delay();

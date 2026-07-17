@@ -20,3 +20,4 @@ data/index/
 
 # Local browser automation output
 .playwright-mcp/
+ask.ps1

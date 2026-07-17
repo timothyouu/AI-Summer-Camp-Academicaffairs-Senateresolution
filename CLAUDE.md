@@ -192,13 +192,85 @@ Installed locally: fastapi, uvicorn, pypdf, numpy, python-multipart; Vite react-
 react-router-dom. Approved but not yet installed (all imports lazy/guarded — tests pass without
 them): boto3, mangum, strands-agents, aws-cdk-lib.
 
+## Answer Synthesis + Generation Gate (2026-07-16, `lambda-variance-spec` branch)
+Fixed a response-formatting regression where chat returned **raw retrieved chunks** as the
+user-facing answer, and guaranteed helpful natural-language answers for **informational questions**
+(which will be extremely common). Scope was **final answer assembly + the generation seam only** —
+retrieval, variance thresholds, logging schema, and AWS infra are untouched. Verifier is now
+**166 backend tests** (130 + 4 answer-synthesis + 4 informational-guarantee + 3 generation-gate,
+minus overlaps; net counted live).
+- **Answer prose is now LLM-synthesized from the retrieved passages**, not dumped verbatim.
+  `chat.py::_synthesize(question, grounded, llm)` builds a plain-language answer via the pipeline's
+  selected LLM under `_SYNTHESIS_SYSTEM` (summarize only supplied text; never "agree"/"align"; no
+  conflict/variance commentary — that is appended separately). The banned string
+  *"The most relevant supplied policy passages state"* and the `text[:360]` concatenation in
+  `_local_index_answer` are **deleted**. When no model is available (local mode, `llm.generate`
+  raises by design), both paths return a safe honest message (`_NO_SYNTHESIS_MESSAGE`) with the
+  retrieved passages attached **as citations after** the answer — never a raw dump.
+- **Informational questions no longer abstain.** `_agent_grounded_answer` previously answered and
+  cited **only from extracted normative claims** (must/may/must_not), so "what is the purpose of…"
+  questions (no such claims) hit *"could not extract a grounded policy claim… abstained"* with zero
+  citations. It now synthesizes from `result.passages` (the full grounded source text) and, when
+  there are no claims, derives citations from those passages. Conflict detection still uses claims;
+  this governs only the user-facing prose. **Verified end-to-end against real Bedrock** (this shell's
+  `converse`): the exact desired Handbook-purpose answer, cited, Handbook-only, no false conflict.
+- **Two-gate tripwire CLOSED.** `create_pipeline` previously required `retrieval_aws` **and**
+  `strands_available()` for authoritative mode, so naming `BEDROCK_KB_ID` **alone** gave real KB
+  retrieval but left generation on `ModuleLLM` (which raises) → still no answers. Now a configured KB
+  is sufficient: **Strands when installed, else a direct boto3 Bedrock `converse` seam**
+  (`agents/factory.py::BedrockConverseLLM`, model from `BEDROCK_MODEL_ID`, default
+  `us.anthropic.claude-sonnet-4-5-20250929-v1:0`; Guardrail attaches when `guardrails_aws`). This
+  matches the existing boto3 retrieval seam and the "Gemini/fallback if Bedrock access falls through"
+  spirit. `boto3` is a stated dependency; `strands` stays optional.
+- **Live requirement for good answers (record this — it is a genuine tripwire):** the product needs
+  `BEDROCK_KB_ID` set **+ AWS creds/Bedrock model access**. Strands is now optional (boto3 fallback).
+  A KB ID with no model access still degrades to the safe message, not a crash.
+
 ## Last Updated
-2026-07-16 — **Docs reorganization.** Added `PROJECT_SCOPE.md` (the condensed cold-start entry
-doc) and rewrote this `CLAUDE.md` from 34KB down under 15KB, preserving every load-bearing fact
-and directive while compressing the five per-session merge narratives (DynamoDB, PR #4, feature/rag,
-variance, conformance pass) into the "Merge & Decision History" section. Historical specs/plans/
-ledgers moved to `docs/archive/` (`spec.md`, `implementation*.md`, `lambdaspec.md`, `LOOP.md`,
-`frontend/LOOP.md`→`frontend-LOOP.md`, `PROGRESS*.md`, `updates.md`, `claude-handoff.md`,
-`Yaza_DynamoDB_Work_Summary.md`); living docs (`README.md`, `AWS_SETUP.md`, `implementation-aws.md`,
-`demo workflow.md`, `infra/README.md`, `backend/rag/README.md`) stayed in place. See
-`PROJECT_SCOPE.md` for the full living-vs-archive map and `git log` for prior per-session detail.
+2026-07-16 — **Merged `origin/main` into `lambda-variance-spec` and resolved conflicts favoring the
+`lambda-variance-spec` generation design** (KB alone → live answers via Strands or a boto3 `converse`
+fallback; fast-model split; bounded Bedrock timeouts). `config.py`, `agents/factory.py`, and the
+generation-coupled tests (`test_agents.py`, `test_guardrails.py`, `test_aws_modes.py`) were taken
+from HEAD; `origin/main`'s discarded `BEDROCK_GENERATION_ENABLED` / `bedrock_streaming` gate and
+`_DeterministicLLM` seam did not survive. `origin/main`'s docs reorg (below) was preserved.
+
+2026-07-16 — **Docs reorganization** (from `origin/main`). Added `PROJECT_SCOPE.md` (the condensed
+cold-start entry doc) and rewrote this `CLAUDE.md` down under 15KB, preserving every load-bearing
+fact while compressing the five per-session merge narratives (DynamoDB, PR #4, feature/rag, variance,
+conformance pass) into the "Merge & Decision History" section. Historical specs/plans/ledgers moved
+to `docs/archive/`; living docs stayed in place. See `PROJECT_SCOPE.md` for the full
+living-vs-archive map and `git log` for prior per-session detail.
+
+Previous: 2026-07-16 — Answer synthesis + generation-gate fix on `lambda-variance-spec`: chat no longer dumps
+raw retrieved chunks; informational questions get LLM-synthesized cited answers instead of abstaining
+(verified against real Bedrock); the KB-without-Strands tripwire is closed via a boto3 `converse`
+fallback. Verifier now **166 backend tests**. See the Answer Synthesis + Generation Gate section.
+
+Previous: 2026-07-16 — Fixed two live-only variance defects on the `lambda-variance-spec` branch (no-variance false positive from a single grounded source; `_verify` 500 on a non-object verifier response). Verifier now **130 backend tests**. See the Variance Layer section.
+
+Previous: 2026-07-16 — Merged teammate PR #4 (source lifecycle, per-user permissions, citation links, persistent
+drafting workspace) into `main` and `prod`, resolved the `llm_revision` conflict, fixed merge seams,
+added draft owner scoping + S3 draft-copy regression test. See the Teammate MVP Branch Merge section.
+
+Previous: 2026-07-16 — Added `implementation-aws.md`: a team-facing AWS account/service setup guide (account
+access via IAM Identity Center, per-service enable steps + IAM permissions + verification commands
+for S3, Bedrock model access/Knowledge Bases/OpenSearch Serverless/Guardrails, DynamoDB, Cognito,
+Lambda + API Gateway, Amplify, EventBridge). It's onboarding-oriented (get a new teammate to
+working AWS access); `AWS_SETUP.md` remains the canonical ordered deploy runbook for this repo's
+own stack — the two overlap by design and should be reconciled or merged later rather than treated
+as duplicates. Committed and pushed directly to `prod` (`8c256fb`) rather than merged — the same
+doc was independently committed and pushed to `demo` (`97afef6`, then `5512dd2` for this note);
+`prod`'s CLAUDE.md has diverged too far from `demo`'s for a merge to make sense here.
+
+Previous: 2026-07-15 (late) — AWS-readiness conformance pass: Bedrock Guardrails built from scratch, role-switcher
+ identity desync + registry source-type fixes,
+drafting→Bedrock defect fixed, CORS made configurable, false llm.py/Bedrock Stack claim corrected.
+See the AWS-Readiness Conformance Pass section.
+
+Previous: 2026-07-15 (evening) — Merged Yaza's DynamoDB app-memory branch into prod (feedback + recurring questions added; prod key schemas kept; single DDB_* config system; four AWS-only bugs fixed; stale README deploy instructions rewritten). Recorded post-pitch AWS-first deployment posture. See the DynamoDB App-Memory Merge section.
+
+Previous: 2026-07-15 — PRD round-2 implementation documented, including source lifecycle and permissions UI, shared resource catalog, drafting assistant, live current/archive catalog smoke results, dark-mode/navigation, and AWS infrastructure.
+
+2026-07-14 (evening) — Sidebar unified to one icon rail with persisted role + Library→Search chats (see Sidebar Unification section); verified via tsc, vite build, and Playwright click-through of both roles.
+
+Previous: 2026-07-14 (later) — Frontend COMPLETE and verified: 12 pages (`frontend/src/pages/`), shared layout/sidebar/role-switcher components, typed mocks (`src/data/mock.ts`) behind `src/api.ts`. Verified via tsc --strict, vite build, and a Playwright click-through of all 6 demo paths plus frame-by-frame screenshot judgment (see PROGRESS.md, incl. WSL screenshot workaround). Run with `cd frontend && npm run dev`. Backend still not built.

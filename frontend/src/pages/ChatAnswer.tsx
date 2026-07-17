@@ -89,11 +89,11 @@ function AnswerBody({ answer, showQuestion = false }: { answer: Answer; showQues
 
       {answer.conflictBanner && <div className="mt-6 flex gap-4 rounded-lg border border-[#e8ad22] bg-amberbg px-5 py-4 text-navy">
         <svg className="mt-0.5 h-6 w-6 shrink-0 text-[#c98a00]" viewBox="0 0 24 24" fill="currentColor"><path d="M11.1 3.5 2.3 19a1.2 1.2 0 0 0 1 1.8h17.4a1.2 1.2 0 0 0 1-1.8L12.9 3.5a1 1 0 0 0-1.8 0ZM13 18h-2v-2h2v2Zm0-4h-2V8h2v6Z" /></svg>
-        <div><p className="font-semibold text-[#b87800]">Policy conflict</p><p className="mt-1 text-[15px] leading-7">{answer.conflictBanner.replace("Policy conflict — ", "")}</p></div>
+        <div><p className="font-semibold text-[#b87800]">Important note</p><p className="mt-1 text-[15px] leading-7">{answer.conflictBanner.replace("Policy conflict — ", "")}</p></div>
       </div>}
 
       {answer.citations.length > 0 && <><p className="mt-6 text-xs font-bold tracking-[0.08em] text-navy/70">CITED SOURCES</p><div className="mt-2 flex flex-wrap gap-4">
-        {answer.citations.filter((citation, index, all) => all.findIndex((item) => item.title === citation.title && item.section === citation.section) === index).map((citation) => <SourceCard key={`${citation.title}-${citation.section}`} citation={citation} />)}
+        {answer.citations.filter((citation, index, all) => all.findIndex((item) => item.title === citation.title) === index).map((citation) => <SourceCard key={citation.title} citation={citation} />)}
       </div></>}
       <div className="mt-3 flex justify-end gap-1">
         <span aria-live="polite" className="mr-auto self-center text-xs text-inkmuted">{notice || (feedback ? "Thanks for the feedback." : "")}</span>

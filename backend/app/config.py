@@ -18,15 +18,6 @@ UPLOAD_DIR = CORPUS_DIR / "uploads"
 # import the FastAPI app), so it lives here rather than in uploads.py.
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
-# Use the US cross-region inference profile explicitly. The corresponding
-# global profile is denied by the organization's SCP, while this profile is
-# available from the deployment region (us-west-2).
-DEFAULT_BEDROCK_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
-DEFAULT_BEDROCK_STREAMING = False
-DEFAULT_BEDROCK_MAX_TOKENS = 1024
-DEFAULT_BEDROCK_TEMPERATURE = 0.0
-DEFAULT_BEDROCK_GENERATION_TIMEOUT_SECONDS = 20.0
-
 # Vite's default port, plus the next port it falls back to when 5173 is taken.
 DEFAULT_DEV_ORIGINS = (
     "http://localhost:5173", "http://127.0.0.1:5173",
@@ -37,9 +28,10 @@ DEFAULT_DEV_ORIGINS = (
 def allowed_origins() -> list[str]:
     """Browser origins the API accepts, overridable for non-default dev ports.
 
-    The stack injects its `frontendOrigin` context into FRONTEND_ORIGINS so the
-    FastAPI middleware, API Gateway, and Lambda Function URL enforce the same
-    allowlist. Local runs can also override this for non-default Vite ports.
+    Deployed traffic is CORS-checked by API Gateway and the Lambda Function URL
+    (both fed by the stack's `frontendOrigin` context), so this list only has to
+    cover local dev — where a second worktree lands on an unexpected Vite port
+    and would otherwise be blocked with no way to configure it.
     """
     configured = os.getenv("FRONTEND_ORIGINS")
     if not configured:
@@ -53,12 +45,21 @@ class Settings:
     aws_profile: str | None = None
     dynamodb_endpoint_url: str | None = None
     bedrock_kb_id: str | None = None
-    bedrock_model_id: str = DEFAULT_BEDROCK_MODEL_ID
-    bedrock_streaming: bool = DEFAULT_BEDROCK_STREAMING
-    bedrock_max_tokens: int = DEFAULT_BEDROCK_MAX_TOKENS
-    bedrock_temperature: float = DEFAULT_BEDROCK_TEMPERATURE
-    bedrock_generation_timeout_seconds: float = DEFAULT_BEDROCK_GENERATION_TIMEOUT_SECONDS
-    bedrock_generation_enabled: bool = False
+    bedrock_kb_search_mode: str = "vector"
+    bedrock_model_id: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    # Optional cheaper/faster model for the pipeline's mechanical JSON stages
+    # (extract/detect/verify). Unset -> every stage uses bedrock_model_id, i.e.
+    # today's behavior byte-for-byte. Set -> the mechanical stages use this model
+    # while user-facing prose (answer synthesis, draft revision) stays on
+    # bedrock_model_id. Lets Haiku carry the fan-out without touching answer
+    # quality. See CLAUDE.md "Verify tuning follow-ups".
+    bedrock_fast_model_id: str | None = None
+    # Bounded so a throttled/stalled Bedrock socket fails fast instead of hanging
+    # the worker. boto3 defaults (60s read x 4 retries ≈ 5 min) can wedge the
+    # request thread — and the pipeline's ThreadPoolExecutor blocks on it.
+    bedrock_connect_timeout: float = 5.0
+    bedrock_read_timeout: float = 25.0
+    bedrock_max_attempts: int = 2
     bedrock_guardrail_id: str | None = None
     bedrock_guardrail_version: str | None = None
     ddb_conflicts_table: str | None = None
@@ -127,16 +128,16 @@ def get_settings() -> Settings:
     """
     value = lambda name: os.getenv(name) or None
     first = lambda *names: next((candidate for name in names if (candidate := value(name))), None)
-    enabled = lambda name: (value(name) or "").strip().lower() in {"1", "true", "yes", "on"}
     return Settings(
         aws_region=value("AWS_REGION"), aws_profile=value("AWS_PROFILE"),
         dynamodb_endpoint_url=value("DYNAMODB_ENDPOINT_URL"),
         bedrock_kb_id=value("BEDROCK_KB_ID"),
-        bedrock_model_id=value("BEDROCK_MODEL_ID") or DEFAULT_BEDROCK_MODEL_ID,
-        bedrock_generation_timeout_seconds=float(
-            value("BEDROCK_GENERATION_TIMEOUT_SECONDS") or DEFAULT_BEDROCK_GENERATION_TIMEOUT_SECONDS
-        ),
-        bedrock_generation_enabled=enabled("BEDROCK_GENERATION_ENABLED"),
+        bedrock_kb_search_mode=(value("BEDROCK_KB_SEARCH_MODE") or "vector").strip().lower(),
+        bedrock_model_id=value("BEDROCK_MODEL_ID") or "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        bedrock_fast_model_id=value("BEDROCK_FAST_MODEL_ID"),
+        bedrock_connect_timeout=float(value("BEDROCK_CONNECT_TIMEOUT") or 5.0),
+        bedrock_read_timeout=float(value("BEDROCK_READ_TIMEOUT") or 25.0),
+        bedrock_max_attempts=int(value("BEDROCK_MAX_ATTEMPTS") or 2),
         bedrock_guardrail_id=value("BEDROCK_GUARDRAIL_ID"),
         bedrock_guardrail_version=value("BEDROCK_GUARDRAIL_VERSION"),
         ddb_conflicts_table=first("DDB_CONFLICTS_TABLE", "DYNAMODB_CONFLICTS_TABLE"),
@@ -148,6 +149,23 @@ def get_settings() -> Settings:
         ddb_recurring_questions_table=first("DDB_RECURRING_QUESTIONS_TABLE", "DYNAMODB_RECURRING_QUESTIONS_TABLE"),
         corpus_bucket=value("CORPUS_BUCKET"), cognito_user_pool_id=value("COGNITO_USER_POOL_ID"),
         cognito_client_id=value("COGNITO_CLIENT_ID"),
+    )
+
+
+def bedrock_client_config(settings: Settings | None = None):  # type: ignore[no-untyped-def]
+    """Bounded botocore Config for Bedrock clients (lazy botocore import).
+
+    Keeps a single source of truth for the timeout/retry policy so both the
+    runtime (generation) and agent-runtime (KB retrieval) clients fail fast
+    instead of hanging the request thread on a stalled or throttled socket.
+    """
+    from botocore.config import Config  # Lazy: botocore only present in AWS mode.
+
+    settings = settings or get_settings()
+    return Config(
+        connect_timeout=settings.bedrock_connect_timeout,
+        read_timeout=settings.bedrock_read_timeout,
+        retries={"max_attempts": settings.bedrock_max_attempts, "mode": "standard"},
     )
 
 
