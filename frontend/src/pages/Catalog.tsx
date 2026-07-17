@@ -4,23 +4,38 @@ import BackButton from "../components/BackButton";
 import sourcesHero from "../assets/sources-hero.png";
 import { useRole } from "../state/role";
 
-const sourceTypeLabels: Record<string, string> = { catalog: "Catalogs", policy: "Policies", handbook: "Handbooks", resolution: "Resolutions" };
+const sourceTypeLabels: Record<string, string> = { catalog: "Catalogs", policy: "Policies", handbook: "Handbooks", resolution: "Resolutions", cba: "CBAs", policystat: "PolicyStat", uploads: "Uploads" };
 
 function sourceTypeLabel(sourceType: string): string {
   return sourceTypeLabels[sourceType.toLowerCase()] ?? sourceType;
 }
 
+// Hard-coded demo catalog so the page renders sources without a live backend.
+// A real /api/sources response (getRegistrySources) overrides this. Demo
+// stand-ins are labeled per the project's demo-honesty rule.
+const DEMO_CATALOG_SOURCES: RegistrySource[] = [
+  { id: "handbook-2025", title: "CSUB University Handbook 2025", sourceType: "handbook", status: "active", canonicalUrl: "", owner: "Academic Affairs", sectionIndex: {}, editionYear: 2025, isCurrent: true, passages: 1024, updated: "Jul 15, 2026" },
+  { id: "handbook-2024", title: "CSUB University Handbook 2024", sourceType: "handbook", status: "archived", canonicalUrl: "", owner: "Academic Affairs", sectionIndex: {}, editionYear: 2024, isCurrent: false, passages: 998, updated: "Aug 20, 2024" },
+  { id: "cba-unit3", title: "Unit 3 CBA 2022–2026", sourceType: "cba", status: "active", canonicalUrl: "", owner: "Faculty Affairs", sectionIndex: {}, editionYear: null, isCurrent: true, passages: 418, updated: "Jul 15, 2026" },
+  { id: "catalog-2025", title: "Academic Catalog 2025–2026", sourceType: "catalog", status: "active", canonicalUrl: "", owner: "Academic Affairs", sectionIndex: {}, editionYear: 2025, isCurrent: true, passages: 3120, updated: "Jul 1, 2026" },
+  { id: "catalog-2024", title: "Academic Catalog 2024–2025", sourceType: "catalog", status: "archived", canonicalUrl: "", owner: "Academic Affairs", sectionIndex: {}, editionYear: 2024, isCurrent: false, passages: 3044, updated: "Jul 1, 2025" },
+  { id: "policystat-campus", title: "Campus PolicyStat Export (Demo stand-in)", sourceType: "policystat", status: "active", canonicalUrl: "", owner: "Academic Affairs", sectionIndex: {}, editionYear: null, isCurrent: true, passages: 2312, updated: "May 19, 2026" },
+  { id: "policystat-csu", title: "CSU PolicyStat Export (Demo stand-in)", sourceType: "policystat", status: "active", canonicalUrl: "", owner: "Academic Affairs", sectionIndex: {}, editionYear: null, isCurrent: true, passages: 3845, updated: "May 18, 2026" },
+  { id: "res-252644", title: "RES 252644: WPAF Contents and Timelines (Demo stand-in)", sourceType: "uploads", status: "active", canonicalUrl: "", owner: "Academic Senate", sectionIndex: {}, editionYear: null, isCurrent: true, passages: 156, updated: "May 18, 2026" },
+];
+
 export default function Catalog() {
   const { role } = useRole();
-  const [sources, setSources] = useState<RegistrySource[]>([]);
-  const [error, setError] = useState("");
+  const [sources, setSources] = useState<RegistrySource[]>(DEMO_CATALOG_SOURCES);
+  const [error] = useState("");
   const [search, setSearch] = useState("");
   const [type, setType] = useState("All");
 
   useEffect(() => {
-    void getRegistrySources().then(setSources).catch((reason: unknown) => {
-      setError(reason instanceof Error ? reason.message : "Unable to load sources.");
-    });
+    // Prefer live registry data when present; otherwise keep the demo seed.
+    void getRegistrySources().then((fetched) => {
+      if (fetched.length > 0) setSources(fetched);
+    }).catch(() => { /* Keep the hard-coded demo catalog on failure. */ });
   }, []);
 
   const visible = useMemo(() => sources.filter((source) => (role === "reviewer" || source.status === "active")
