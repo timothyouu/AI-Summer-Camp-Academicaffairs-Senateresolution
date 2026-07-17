@@ -345,6 +345,14 @@ const writeConflictState = (state: PersistedConflictMap): void => {
 export async function askQuestion(text: string, role: Role = "reviewer"): Promise<Answer> {
   const question = text.trim();
   if (!question) throw new Error("Enter a policy question.");
+  // Demo-only: when a faculty member asks about conflicts, always surface the
+  // tenure-credit case with its two supplied sources (Handbook 304.4.1 and Unit
+  // 3 CBA 13.4). Runs before the backend call so it is genuinely static. The
+  // answer keeps its honest "sources align" framing — per the locked CLAUDE.md
+  // decision we do not manufacture a service-credit conflict banner here.
+  if (role === "employee" && /conflict|conflicting|contradict/i.test(question)) {
+    return cloneAnswer(conversationAnswers["service-credit"], question);
+  }
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (import.meta.env.VITE_USE_COGNITO !== "true") headers["X-Role"] = role;
   const backend = await backendRequest<BackendChatResponse>("/api/chat", {
