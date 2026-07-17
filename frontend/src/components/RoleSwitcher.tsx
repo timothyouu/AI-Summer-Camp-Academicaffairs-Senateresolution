@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { setDemoIdentity } from "../api";
 import { signOutCognito } from "../auth/cognito";
 import { useRole } from "../state/role";
@@ -9,15 +9,14 @@ const cognitoModeEnabled = import.meta.env.VITE_USE_COGNITO === "true";
 export default function RoleSwitcher() {
   const { role, setRole } = useRole();
   const navigate = useNavigate();
-  const location = useLocation();
   const [open, setOpen] = useState(false);
-  const isChatsHome = location.pathname === "/chats";
 
   const changeRole = (nextRole: "employee" | "reviewer") => {
     setRole(nextRole);
     setDemoIdentity(nextRole);
     setOpen(false);
-    navigate(nextRole === "employee" ? "/chats" : "/reviews");
+    // Both roles land on the New chat home after switching.
+    navigate("/chats");
   };
 
   if (cognitoModeEnabled) {
@@ -30,14 +29,6 @@ export default function RoleSwitcher() {
           Sign out
         </button>
       </div>
-    );
-  }
-
-  if (role === "employee" && isChatsHome) {
-    return (
-      <button type="button" onClick={() => changeRole("reviewer")} className="rounded-lg border border-navy/25 bg-white px-5 py-3 text-sm font-medium text-brand-blue hover:bg-blue-50">
-        Policy Maker view
-      </button>
     );
   }
 
