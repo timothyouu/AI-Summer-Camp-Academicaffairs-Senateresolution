@@ -1,17 +1,29 @@
 # Policy Intelligence Assistant
 
-A customer-ready policy assistant for exploring CSUB academic policy, asking source-grounded questions, checking draft resolutions, recording conflicts, browsing topics, and uploading PDF/Markdown/text sources. It runs with deterministic local retrieval and SQLite by default; environment variables activate Bedrock, DynamoDB, S3, Cognito, and the Strands agent pipeline without changing API contracts.
+I built this for the AI Summer Camp hackathon (Academic Affairs / Senate Resolution track), as a policy search assistant for CSUB. Employees ask a chatbot about academic policy and get cited, conflict-aware answers. Policy makers and reviewers check draft resolutions for overlap and conflicts against the existing policy corpus, and work from a persistent drafting workspace with a conflict log they can review in full.
 
-Source governance is enforced at the API boundary: Cognito `admins` manage
-per-user grants, source owners and reviewer/writers need `can_edit` to change
-existing sources, and `can_add` alone cannot replace a source. Registry entries
-carry canonical URLs plus a section-link index; chat citations and the shared
-resource catalog resolve through that same metadata.
+I designed the whole system to run dual-mode. By default it's local: deterministic hash-based retrieval, SQLite for the conflict log and upload registry, and a NumPy/JSON on-disk vector index, so the demo needs zero AWS access. Setting the right environment variables flips individual pieces over to AWS (Bedrock, DynamoDB, S3, Cognito, the Strands agent pipeline) without touching the API contracts. Every integration is gated on its own env var, so I can bring pieces onto AWS one at a time instead of an all-or-nothing switch.
 
-Reviewer drafts are persistent rather than browser-only. The Drafts workspace
-supports titled drafts, conversational revision instructions, status changes,
-version history, version comparison, and restoring an older version as a new
-version. SQLite is used locally and `DDB_DRAFTS_TABLE` activates DynamoDB/S3.
+I enforce source governance at the API boundary, not just in the UI. Cognito admins manage per-user grants, source owners and reviewer/writers need `can_edit` to change an existing source, and `can_add` alone can't replace one. I gave registry entries canonical URLs plus a section-link index, and both chat citations and the shared resource catalog resolve through that same metadata so a citation always points somewhere real.
+
+I made reviewer drafts persistent instead of browser-only. The Drafts workspace I built supports titled drafts, conversational revision instructions, status changes, version history, version comparison, and restoring an older version as a new one. SQLite backs this locally; setting `DDB_DRAFTS_TABLE` moves it to DynamoDB and S3.
+
+## Tech stack
+
+- **Frontend:** React (Vite, TypeScript strict) with Tailwind CSS.
+- **Backend:** FastAPI, typed Python, with Mangum wrapping it for Lambda (`backend/app/lambda_entry.py`).
+- **Local persistence:** SQLite for the conflict log and upload registry, plus a NumPy/JSON on-disk vector index for retrieval.
+- **AWS persistence:** DynamoDB (conflict log, uploads, registry, permissions, drafts, feedback, recurring questions) and S3 for the corpus bucket and draft version bodies.
+- **AI/ML, local:** `backend/app/llm.py` is my local seam. It builds deterministic hash-based embeddings and its `generate()` deliberately raises, so every route falls back to a source-backed deterministic builder. It holds no boto3 Bedrock client; it isn't a Bedrock seam.
+- **AI/ML, AWS:** retrieval goes through a Bedrock Knowledge Base (`backend/app/retrieval.py`, gated on `BEDROCK_KB_ID`, embedding with Titan Text Embeddings V2), and generation runs through the Strands SDK wrapping Bedrock (`backend/app/agents/factory.py::StrandsLLM`). Bedrock Guardrails attach to generation when configured. Gemini is my fallback if Bedrock access falls through.
+- **Infra:** a single CDK Python stack (`infra/stacks/policy_intelligence_stack.py`) that provisions all seven DynamoDB tables, the S3 corpus bucket, Bedrock KB and Guardrail, OpenSearch Serverless, Lambda plus API Gateway, and Cognito.
+- **PDF ingestion:** pypdf for extraction.
+
+## Architecture
+
+I built a six-agent conflict pipeline (`backend/app/agents/`) that emits a full `agent_trace` for every check, and a variance layer (`backend/app/agents/variance.py`) that sits over the pipeline's output as a softer re-labeling pass, without re-implementing retrieval or verification. The pipeline activates Strands when the `strands` package is importable and `BEDROCK_KB_ID` is set; otherwise it stays on the local deterministic path.
+
+A store abstraction (`backend/app/stores.py`) fronts either SQLite or DynamoDB per table, so I never had to write two separate code paths against the routes. Sign-in stays hardcoded and local for the demo (`backend/app/auth.py`, two demo accounts), a deliberate choice I made to keep Cognito off the critical path even though the product spec lists it as a core service.
 
 ## Run locally
 
@@ -68,7 +80,7 @@ export DDB_RECURRING_QUESTIONS_TABLE=policy-intelligence-recurring-questions
 ./scripts/verify_dynamodb_tables.sh
 ```
 
-The `DYNAMODB_*` names from `Yaza_DynamoDB_Work_Summary.md` §7 are accepted as
+The `DYNAMODB_*` names from `docs/archive/Yaza_DynamoDB_Work_Summary.md` §7 are accepted as
 aliases for five of the above, so that runbook still works —
 `DYNAMODB_SOURCE_REGISTRY_TABLE` sets the registry table,
 `DYNAMODB_ACCESS_CONTROL_TABLE` the permissions table, and

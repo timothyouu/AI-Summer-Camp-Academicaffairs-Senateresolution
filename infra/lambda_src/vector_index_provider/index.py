@@ -14,6 +14,7 @@ infra/stacks/policy_intelligence_stack.py.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -47,7 +48,18 @@ def _signed_request(
         raise RuntimeError("No AWS credentials available to the vector-index Lambda")
 
     data = json.dumps(body).encode("utf-8") if body is not None else b""
-    request = AWSRequest(method=method, url=url, data=data, headers={"Content-Type": "application/json"})
+    request = AWSRequest(
+        method=method,
+        url=url,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            # AOSS requires this header on every SigV4 request. Botocore's
+            # generic SigV4Auth includes the payload digest in the canonical
+            # request, but does not add the header itself.
+            "X-Amz-Content-Sha256": hashlib.sha256(data).hexdigest(),
+        },
+    )
     SigV4Auth(credentials, SERVICE, region).add_auth(request)
     prepared_headers = dict(request.headers.items())
 

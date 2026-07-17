@@ -1,193 +1,196 @@
 # Project: Policy Intelligence Assistant (AI Summer Camp — Academic Affairs / Senate Resolution)
 
-## Purpose
-Hackathon customer solution for a university (CSUB): a policy search assistant with two role paths — employees ask a chatbot policy questions and get cited, conflict-aware answers; policy makers/reviewers check draft resolutions for overlap/duplicates/conflicts and review a conflict log. See `spec.md` (what/why) and `implementation.md` (how). **Customer demo was pitched 2026-07-15 — done.** Remaining deadline: hackathon Friday 7AM, presented on the real AWS architecture (implementation2.md §1).
+**Read `PROJECT_SCOPE.md` first** — it is the condensed entry doc (product, architecture, env
+gating, verifier, locked decisions, living-docs map). This file holds the working rules and
+directives. Full historical narrative lives in `docs/archive/` and `git log`.
 
-## Deployment Posture (decided 2026-07-15, after the customer pitch)
-Target is **AWS-real, not local**. Per Tim: "I want most of it to not be local. One of the few things that are local will just be purely the sign in, and anything within Notion that I did not list."
-- **On AWS** (Notion §9 Core Services): DynamoDB (conflict log, uploads, registry, permissions, drafts, feedback, recurring questions), S3 corpus bucket, Bedrock KB + Titan/Claude, API Gateway + Lambda, Strands agents.
-- **Stays local**: sign-in only — hardcoded demo accounts in `auth.py`. Cognito stays OFF (matches implementation3.md's "Cognito stays OFF for the demo"), even though Notion §9 lists it as core. This is a deliberate override.
-- The code is AWS-ready today; going non-local is *deployment config*, not a code change. Every integration is gated on its own env var, so nothing flips until a table/bucket is named. See `AWS_SETUP.md` for the ordered steps.
-- Decision authority when docs disagree: the **Notion PRD governs what exists** (features, fields); **implementation*.md governs how it is built** (keys, wiring). Settled by council 2026-07-15 — see `~/COUNCIL.md` log.
+## Purpose
+Hackathon customer solution for CSUB: a policy search assistant with two role paths. Employees ask
+a chatbot policy questions and get cited, conflict-aware answers; policy makers/reviewers check
+draft resolutions for overlap/duplicates/conflicts and review a conflict log. **Customer demo
+pitched 2026-07-15 — done.** Remaining deadline: hackathon Friday 7AM, on the real AWS architecture.
+
+## Deployment Posture (decided 2026-07-15)
+Target is **AWS-real, not local**. Per Tim: only sign-in stays local. On AWS: DynamoDB (conflict
+log, uploads, registry, permissions, drafts, feedback, recurring questions), S3 corpus bucket,
+Bedrock KB + Titan/Claude, API Gateway + Lambda, Strands agents. Stays local: sign-in only —
+hardcoded demo accounts in `auth.py`. **Cognito stays OFF for the demo** even though Notion §9
+lists it as core — a deliberate override. The code is AWS-ready today; going non-local is
+deployment config, not a code change, because every integration is gated on its own env var. See
+`AWS_SETUP.md` for the ordered steps.
+
+**Decision authority when docs disagree:** the **Notion PRD governs what exists** (features,
+fields); the archived **implementation*.md governed how it was built** (keys, wiring); **CLAUDE.md
+records what was actually done** and wins any dispute about current state. Settled by council
+2026-07-15 (`~/COUNCIL.md`).
 
 ## Stack
-- Frontend: React (Vite, TypeScript strict) + Tailwind CSS
-- Backend: FastAPI (Python, typed)
-- Database: SQLite (conflict log, upload registry); NumPy + JSON on-disk vector index
-- AI/ML: dual-mode. **Local (default):** `backend/app/llm.py` builds deterministic hash-based embeddings, and its `generate()` deliberately raises — every route falls back to a source-backed deterministic builder, so the demo needs zero AWS. **AWS mode:** retrieval goes to a Bedrock Knowledge Base (`backend/app/retrieval.py`, `bedrock-agent-runtime.retrieve`, gated on `BEDROCK_KB_ID`); the KB does its own embedding with Titan Text Embeddings V2 (configured in the CDK stack, not in app code); generation goes through the Strands SDK (`backend/app/agents/factory.py::StrandsLLM`), which wraps Bedrock; Bedrock Guardrails attach to that generation when `BEDROCK_GUARDRAIL_ID` is set. Note: `llm.py` is the *local* seam, **not** a Bedrock client — no boto3 Bedrock call lives there. (Gemini remains the designated fallback if Bedrock access falls through.)
-- Other: pypdf for PDF extraction
+- Frontend: React (Vite, TypeScript strict) + Tailwind CSS.
+- Backend: FastAPI (typed Python); Mangum for Lambda (`backend/app/lambda_entry.py`).
+- Database: SQLite (conflict log, upload registry) + NumPy/JSON on-disk vector index locally;
+  DynamoDB/S3 in AWS mode.
+- AI/ML — dual-mode. **Local (default):** `backend/app/llm.py` is the local seam — deterministic
+  hash-based embeddings, and its `generate()` deliberately raises, so every route falls back to a
+  source-backed deterministic builder and the demo needs zero AWS. `llm.py` holds **no boto3
+  Bedrock client — it is not a Bedrock seam.** **AWS mode:** retrieval → Bedrock KB
+  (`backend/app/retrieval.py`, `bedrock-agent-runtime.retrieve`, gated on `BEDROCK_KB_ID`; the KB
+  embeds with Titan Text Embeddings V2, configured in CDK not app code); generation → Strands SDK
+  (`backend/app/agents/factory.py::StrandsLLM` wrapping Bedrock); Bedrock Guardrails attach to
+  generation when `BEDROCK_GUARDRAIL_ID` is set. Gemini remains the designated fallback if Bedrock
+  access falls through.
+- Other: pypdf for PDF extraction.
 
 ## Project Structure
-- `spec.md` — demo spec, scope decisions, success criteria, assumptions
-- `implementation.md` — phased plan, repo layout, verification steps
-- `demo workflow.md` — frame-to-frame navigation map for the 12 UI frames (source of truth for routing)
-- `PROGRESS.md` — frontend build task ledger (statuses so Claude/Codex can resume cold)
-- `frontend/` — Vite + React-TS (strict) + Tailwind 3.4 SPA; hand-written scaffold (no `npm create`), `frontend/LOOP.md` holds the build-loop methodology
-- `backend/`, `data/` — per the layout in implementation.md (not yet scaffolded)
+- `PROJECT_SCOPE.md` — condensed entry doc; `CLAUDE.md` — this file (working rules).
+- `README.md`, `AWS_SETUP.md`, `implementation-aws.md`, `infra/README.md`,
+  `backend/rag/README.md`, `demo workflow.md` — living operational docs.
+- `docs/archive/` — superseded specs/plans/ledgers (`spec.md`, `implementation.md`,
+  `implementation2.md`, `implementation3.md`, `lambdaspec.md`, `LOOP.md`, `frontend-LOOP.md`,
+  `PROGRESS.md`, `PROGRESS-AWS.md`, `updates.md`, `claude-handoff.md`,
+  `Yaza_DynamoDB_Work_Summary.md`).
+- `backend/app/` — FastAPI app: `stores.py` (SQLite/DynamoDB abstraction), `dynamodb_client.py`
+  (boto3 resource API), `agents/` (6-agent pipeline + `variance.py`), `registry.py`,
+  `permissions.py`, `drafting.py`, `catalog.py`, `feedback.py`, `recurring_questions.py`,
+  `retrieval.py`, `lambda_entry.py`. `infra/` — single CDK Python stack.
 
-## Architecture Notes
-- Local-first demo deliberately mirroring the PRD's AWS target (FastAPI⇄API Gateway/Lambda, data/corpus⇄S3, NumPy index⇄Bedrock KB) so it ports without a rewrite.
-- Sign-in is intentionally hardcoded (two demo accounts in `auth.py`) — agreed shortcut for the demo; Cognito later.
-- Synthetic corpus files (`data/corpus/synthetic-*.md`) exist to make the PRD calibration cases fire deterministically; they are disclosed stand-ins, keep the naming.
-- Conflict display decision: contextual flagging in chat + everything accumulates in the maker conflict log.
+## Env-Var Gating (summary; full table in AWS_SETUP.md §4 and PROJECT_SCOPE.md)
+Per-table `DDB_*_TABLE` gating is the **only** config system. `BEDROCK_KB_ID` flips retrieval to
+the KB, disables local indexing, and activates Strands. `BEDROCK_GUARDRAIL_ID` /
+`_VERSION` attach the guardrail. `DDB_CONFLICTS_TABLE`, `DDB_REGISTRY_TABLE`,
+`DDB_PERMISSIONS_TABLE`, `DDB_DRAFTS_TABLE`, `DDB_UPLOADS_TABLE` flip each store to DynamoDB.
+Cognito needs both backend `COGNITO_*` and frontend `VITE_USE_COGNITO` — OFF for the demo.
+`FRONTEND_ORIGINS` sets local-dev CORS (`config.py::allowed_origins()`); deployed CORS is
+CDK-driven. `VITE_AGENT_BASE_URL` routes `/api/chat` + `/api/check-resolution` to the Lambda
+Function URL to dodge API Gateway's ~29s cap (unset → fall back to `VITE_API_BASE_URL`, which 5xxs
+at ~29s in real AWS).
+- **`PersistenceSettings` / `load_persistence_settings` / `StoreFactory` / `APP_ENV` /
+  `APP_PERSISTENCE_BACKEND` are deleted — do not reintroduce.** Yaza's `DYNAMODB_*` names survive
+  only as aliases (`DYNAMODB_SOURCE_REGISTRY_TABLE`→registry, `DYNAMODB_ACCESS_CONTROL_TABLE`→
+  permissions, `DYNAMODB_DRAFT_VERSIONS_TABLE`→drafts).
+
+## Verifier + Frozen Files
+```
+python -m backend.scripts.build_index
+env -u BEDROCK_KB_ID -u AWS_REGION -u AWS_PROFILE python -m pytest backend/tests -q
+cd frontend && npx tsc --noEmit && npm run build
+```
+Baseline: **152 backend tests** + tsc + vite build. This shell injects Bedrock config via Claude
+Code (`CLAUDE_CODE_USE_BEDROCK=1`), which flips the app into AWS mode — run tests with those vars
+unset as shown, and build the local index first.
+
+**Frozen verifier files — must not be modified and must keep passing:**
+`backend/tests/conftest.py`, `backend/tests/test_api.py`, `backend/tests/test_ingest_retrieval.py`.
 
 ## Active Constraints
-- No AWS credentials configured on this WSL machine yet (Phase 0 blocker — Tim must run aws configure/login and verify Bedrock model access). `aws` CLI v2.35 is installed but `aws configure list-profiles` returns nothing; the `csub-policy` profile used to provision the app-memory tables lives on Yaza's machine, so **no live-AWS verification has been run from this repo**.
-- Handbook PDF not yet in `data/corpus/`; CBA source: `/mnt/c/Users/timot/Downloads/Unit 3 CBA 2022-2026.pdf`.
-- Demo honesty: synthetic data disclosed to customer; no fabricated "real" sources.
+- **Updated 2026-07-16 — AWS access:** this WSL uses the AWS IAM Identity Center profile
+  `csub-senate`; region remains `us-west-2` (Oregon) for everything.
+- **Updated 2026-07-16 — real corpus:** `CSUB University_Handbook_2025.pdf` and
+  `Unit 3 CBA 2022-2026.pdf` are present in `data/corpus/` and declared in
+  `infra/scripts/prepare_corpus.py::CORPUS_SOURCES`.
+- **Demo honesty:** synthetic data disclosed to customer; no fabricated "real" sources. The
+  `synthetic-*.md` corpus files are disclosed stand-ins — keep the naming. See README.md's "Demo
+  integrity" paragraph for the public wording.
+- **Sign-in is hardcoded** — two demo accounts in `auth.py` (`reviewer@campus.edu` /
+  `employee@campus.edu`, both `demo123`; roles `maker`/`employee`). Reviewer doubles as Admin;
+  **there is deliberately no third role** for the demo.
+- Orchestration gotcha: the Codex sandbox mounts a worktree's `.git` read-only — Codex workers
+  cannot commit; the orchestrator commits.
+- **Non-goals (permanent fence):** Senate workflow / Robert's Rules automation, voting/signature
+  tracking, a policy-editing suite, legal interpretation, deep archive search, personal-computer
+  file ingestion.
+
+## Do-Not-Fix / Locked Decisions
+- **Single 96px icon-rail sidebar**, seven locked items (New chat, Search chats, Drafts, Reviews,
+  Conflicts, Topics, Sources). Employees see New chat / Search chats / Topics only; reviewers see
+  all seven. Do not reintroduce per-role layouts. **`/catalog` is deliberately NOT on the rail** —
+  reached only via links from Topics/Sources.
+- **Permission enforcement is identity-opt-in, not identity-required:** no identity headers →
+  no enforcement, by design, to keep frozen tests green. Headerless local requests resolve to
+  `local-reviewer` and pass permission checks (round-2 design).
+- **Two-place taxonomy — keep `registry.py` and `infra/scripts/prepare_corpus.py` in step.**
+  `registry.py::_SEED_TYPE_BY_STEM` mirrors `CORPUS_SOURCES`; verified split is 3 handbook / 3 cba
+  / 3 policystat / 7 uploads. (`prepare_corpus.py`'s second field is an S3 prefix vocabulary, not
+  the registry taxonomy — the "rtp/ taxonomy drift" flag was a false positive.)
+- **`ARCHIVED_EDITION_WEIGHT = 0.5`** — retrieval drops archived sources and down-ranks
+  non-current catalog editions by this factor.
+- **Service-credit / tenure-clock case answers as *alignment*, not a conflict** (both sources cap
+  at two years in the supplied text; `synthetic-handbook-service-credit.md` says so). The WPAF
+  case (Handbook Appendix G vs RES 252644) is the real conflict demo. Do not manufacture the
+  service-credit conflict — it would violate demo honesty.
+- **Variance escalation wording** = the PRD denied-topic string *"consult your dean, the Provost's
+  office, or the appropriate office"*, NOT the customer's rejected "Faculty Affairs / Labor
+  Relations" ask (lambdaspec.md §9, which contradicts the governing PRD).
+- **Guardrail output filters are deliberately looser than input** (Notion §9) — a blanket HIGH
+  would block the harassment/weapons/misconduct policies the assistant explains. `PROMPT_ATTACK`
+  output strength must stay `NONE` (Bedrock API rejects any other value).
+- **`backend/rag/` two-KB topology is spike-only.** The app keeps a single `BEDROCK_KB_ID`. Do not
+  copy the two-KB pattern into the app.
+- **Variance `detect_variance` dedups on (source pair, topic)** and abstains unless ≥2 distinct
+  grounded sources exist — mirrors the conflict store's idempotence key; the local-index path does
+  not attach a variance signal (a reverted attempt, `ee7bb1e`). Do not "fix" either.
+- The DynamoDB schema conflict is **settled toward prod** (`id`; `user_email`+`source_type`;
+  `draft_id`+numeric `version`); the 7 tables were confirmed empty by Tim 2026-07-15. **Do not
+  re-open.**
+
+## DynamoDB / AWS Gotchas
+- **Never construct boto3 DynamoDB clients directly** — go through
+  `dynamodb_client.get_dynamodb_client()` so `DYNAMODB_ENDPOINT_URL` reaches every store.
+- `_ddb_encode` emits `{"N":"True"}` for booleans (`bool` subclasses `int`) — test bools/ints
+  first if you extend it; it cannot represent lists, which is why feedback/recurring use the
+  resource API.
+- `stores._timestamp` must parse Pydantic's trailing `Z` (`datetime.fromisoformat` only accepts it
+  on 3.11+; this venv is 3.10) — use it, not `fromisoformat`, at every call site.
+- `list_feedback`/`list_questions` use `_scan_all()` (pages to exhaustion, never passes `Limit` to
+  a filtered Scan; callers sort then slice) — keep the regression tests.
+- CDK builds all 7 tables (`_build_dynamodb_tables`); `setup_dynamodb_tables.sh` is the
+  DynamoDB-only path when a full `cdk deploy` is too slow, and refuses to touch a mismatched table.
+- Chat logs the recurring question **before** `shape_response_for_role`, so aggregates are
+  role-independent. Draft routes are owner-scoped (403 on another user's draft unless `ADMIN_EMAIL`).
+- Startup re-indexes the corpus every boot (a persisted index can be stale); AWS mode
+  (`BEDROCK_KB_ID`) skips local indexing. `build_chunks` skips unreadable corpus files with a
+  warning so a corrupt file can't crash startup.
+
+## Merge & Decision History (condensed — full story in docs/archive/ + git log)
+Five real merges landed on `main`/`prod`, each preserving the contributor's commits:
+- **Yaza's DynamoDB app-memory** — added answer feedback (`feedback.py`), recurring questions
+  (`recurring_questions.py`), `dynamodb_client.py`. Fixed four AWS-only bugs (see gotchas above).
+- **PR #4 MVP** (source lifecycle, per-user permissions, citation links, drafting workspace) —
+  `drafting.py::llm_revision` keeps the `llm: LLM` first param so revision reaches the pipeline's
+  Bedrock LLM, plus the branch's `instruction` param. Draft owner-scoping regression-tested.
+- **Feature/rag** (Alyssa's Bedrock RAG spike) — purely additive under `backend/rag/`, nothing in
+  `backend/app/` imports it. Config reconciled to env-gated reads. Carries **unverified** KB IDs
+  `HHFJ4IDG9M` (academic) / `87GR7ILJEF` (senate), both `us-west-2`, and model
+  `us.anthropic.claude-sonnet-4-5-20250929-v1:0` — evidence Alyssa has Bedrock access, not verified
+  live from this repo. See `backend/rag/README.md`.
+- **Variance layer** (`lambdaspec.md`) — soft "policy variance" re-labeling *over* the pipeline,
+  never a fork. `variance.py` derives `authority_rank` from a `doc_type` lookup (cba 100 > handbook
+  60 > policystat 40 > catalog 20), no schema change, no LLM pass, reviewer-only. `log_variance`
+  reuses the conflict store and downgrades a store failure to a warning. Live-path guards:
+  `detect_variance` abstains under 2 sources; `AgentPipeline._verify` rejects unparseable *live*
+  verify output (`context_valid=False`) but still accepts deterministic local analyses at 0.75.
+- **AWS-readiness conformance pass** — built Bedrock Guardrails from scratch
+  (`_build_guardrail()`); fixed drafting→Bedrock, role-switcher identity desync (`setDemoIdentity`
+  keeps role+email in sync — if you change one, change both), and registry source-typing; made
+  CORS configurable. Corrected the false "all Bedrock in llm.py" claim (it's the local seam).
+
+Code comments in `backend/app/agents/variance.py` and
+`infra/stacks/policy_intelligence_stack.py` cite archived docs by section number — update to
+`docs/archive/...` if you touch those files.
+
+## Deliberate Gaps
+Not built, on purpose (Notion §9): self-consistency (would triple Bedrock latency vs. the ~29s
+cap) and negative controls. Deferred per lambdaspec.md §15: a dedicated variance table (reuses the
+conflicts table), an async log-writer Lambda, variance on `/api/check-resolution`, section
+re-chunking + KB re-ingest. Implemented: programmatic span verification
+(`agents/verification.py`, the PRD's "single biggest lever"), blind parallel extractors,
+structured outputs, abstention. **Tuning punch-list** (soft choices flagged for revisit):
+`EMPLOYEE_CONFLICT_GUIDANCE` copy, `POLICY_LINK_KEYWORDS` filter, `ARCHIVED_EDITION_WEIGHT = 0.5`,
+identity-opt-in enforcement.
 
 ## Dependencies
-Planned (not yet installed — needs Tim's approval): fastapi, uvicorn, boto3, pypdf, numpy, python-multipart; Vite react-ts scaffold, tailwindcss, react-router-dom.
-
-## Frontend Decisions (2026-07-14)
-- Frontend-only for now: all content from typed mocks in `src/data/mock.ts` behind a typed `src/api.ts` facade shaped like implementation.md's endpoints (backend swap later touches one file).
-- Design source of truth: 12 frame PNGs at `/mnt/c/Users/timot/.codex/generated_images/019f62e2-8e7b-7702-852c-c8336fb4affa/`; fidelity bar is close match, not pixel-diff.
-- CSUB shield logo is a hand-built SVG approximation (`src/components/Logo.tsx`), not the official asset.
-- Build orchestrated via Codex subagents (gpt-5.6-sol for complex pages, gpt-5.6-terra for simpler ones); Claude orchestrates and verifies with Playwright.
-
-## Sidebar Unification (2026-07-14, evening)
-- Single 96px icon-rail sidebar for both roles (the old wide 256px reviewer variant is deleted). Item order: New chat, Search chats, Drafts, Reviews, Conflicts, Topics, Sources — employee role shows only New chat / Search chats / Topics; reviewer shows all seven. Decided with Tim via alignment questions; do not reintroduce per-role layouts.
-- Role now persists via RoleProvider (localStorage) instead of being forced by the route: shared routes (/chats, /chats/:id, /library, /topics, /topics/:slug) render under the current role (`SharedRoute` in App.tsx); maker-only routes still force reviewer (`WorkspaceRoute`).
-- /library page is now "Search chats" (chats-only searchable history; Saved policies tab removed). The route and file name Library.tsx are unchanged.
-- Note: `demo workflow.md`'s frame map predates this unification; the sidebar behavior above supersedes it where they conflict.
-
-## AWS Readiness (prod branch, 2026-07-15)
-- Branch `prod` (off `demo`) implements implementation2.md code-side: everything runs locally with zero AWS, and each integration flips to AWS via env vars — see `AWS_SETUP.md` (ordered manual steps) and `LOOP.md` (locked decisions). Verifier: `backend/.venv/bin/python -m pytest backend/tests -q` + `cd frontend && npx tsc --noEmit && npm run build`. (The "17 tests" figure once here was long stale — see the merge section below for the current count.)
-- New: `backend/app/stores.py` (SQLite/DynamoDB store abstraction), `backend/app/agents/` (Notion-design 6-agent conflict pipeline with `agent_trace` output; Strands SDK activates when `strands` importable + `BEDROCK_KB_ID` set), `backend/app/lambda_entry.py` (Mangum), `backend/lambda_handlers/ingestion.py` (S3→KB sync), `infra/` (CDK Python stack, see infra/README.md), `frontend/src/auth/cognito.ts` + `AuthCallback.tsx` (Hosted UI PKCE behind `VITE_USE_COGNITO` — zero new npm deps; aws-amplify deliberately not used), `frontend/src/components/AgentActivity.tsx` (trace panel).
-- Not yet installed (approved, pending Tim): boto3, mangum, strands-agents, aws-cdk-lib. All such imports are lazy/guarded; tests must keep passing without them.
-
-## PRD Round-2 (2026-07-15)
-
-- Source lifecycle is backed by a dual-mode SQLite/DynamoDB registry (`GET /api/sources`, `POST /api/sources/{id}/status`). Corpus seeds start active; documents arriving through uploads start archived. Retrieval drops archived sources after retrieval and down-ranks non-current catalog editions by 0.5.
-- Source permissions attach per user and source type (`handbook`, `cba`, `policystat`, `catalog`, `uploads`) with independent `can_add` / `can_edit` flags. The demo reviewer is the admin and is seeded with full access; identified uploads require the `uploads` add grant. Local identity comes from `X-User-Email`; verified Cognito claims take over when Cognito is configured.
-- Conflict responses are role-shaped: employees receive non-clickable escalation guidance with raw conflict sources and IDs removed, while reviewers retain full detail. Local role comes from `X-Role` and defaults to reviewer for compatibility; Cognito claims are authoritative in AWS mode.
-- The reviewer-only drafting workspace supports save, list/reopen, conversational revisions, status, version history, unified comparison, and restore-as-new-version. Draft versions use SQLite locally or DynamoDB/S3 when `DDB_DRAFTS_TABLE` is set, with a deterministic zero-Bedrock fallback.
-- Catalog ingestion is stdlib-only (`urllib.request` + `html.parser`). Run the current catalog plus exactly one archived edition through `backend/scripts/scrape_catalog.py` or the manually invoked `CatalogScraperFn`; edition metadata drives the retrieval weighting above.
-- Frontend API bindings for registry, permissions, drafting, demo identity, and role headers are complete. The shared `/catalog` page is available to both roles; employees see active sources only, while reviewers also see lifecycle status. The Sources page supports archive/unarchive and per-source-type permissions. The reviewer Drafts page is a persistent drafting workspace, and the Resolution Checker mounts the same instruction-driven Draft Assistant.
-- Dark mode uses CSS variables, defaults to light, persists in localStorage, and is controlled from the sidebar gear's settings popover. Shared back buttons are wired, and the sidebar emblem navigates to `/login`.
-- AWS round-2 resources are independently env-gated with `DDB_REGISTRY_TABLE`, `DDB_PERMISSIONS_TABLE`, and `DDB_DRAFTS_TABLE`. Cognito stays optional and OFF for the demo unless both backend `COGNITO_*` values and frontend `VITE_USE_COGNITO` settings are enabled.
-
-## DynamoDB App-Memory Merge (2026-07-15)
-`integration/yaza-dynamodb-app-memory` (Yaza Myo Tun's work, originally branched off `demo`) is merged into `prod` as a real merge commit — his commits are in the history, not squashed. Verifier is now **107 backend tests** (was 87 pre-merge) + `cd frontend && npx tsc --noEmit && npm run build`.
-- **New from that branch:** answer feedback (`backend/app/feedback.py`, `POST/GET /api/feedback`, wired-up thumbs in `ChatAnswer.tsx` — previously dead UI), recurring questions (`backend/app/recurring_questions.py`, `GET /api/recurring-questions`, chat `answer_id`), `backend/app/dynamodb_client.py` (boto3 *resource* API — required because feedback/recurring records hold lists that `_ddb_encode` cannot represent), and `scripts/setup_dynamodb_tables.sh` / `verify_dynamodb_tables.sh`. These cover the Notion Should-Have items "Answer feedback" and "Recurring questions hub".
-- **Schema conflict resolved toward prod.** Both sides built conflicts/registry/permissions/drafts with incompatible keys. Prod's won (`id`; `user_email`+`source_type`; `draft_id`+numeric `version`) because those APIs and tests already worked and the AWS tables held no data. **Confirmed empty by Tim 2026-07-15** — and empty by construction for three of the four, since Yaza's §10 lists the access-control/source-registry/draft-version APIs as never implemented, so no code could write to them. Only `policy-intelligence-conflicts` could hold his manual test records, which `DEMO_CONFLICTS` + `backend/scripts/seed_conflicts.py` regenerate. The two tables that took real writes (feedback, recurring questions) kept their schemas, so their data was never at risk. **This question is settled — do not re-open it.** The scripts were retargeted; `policy-intelligence-uploads` added (the app-memory set lacked it).
-- **One config system.** Per-table `DDB_*_TABLE` gating only. `PersistenceSettings` / `load_persistence_settings` / `StoreFactory` / `APP_ENV` / `APP_PERSISTENCE_BACKEND` are **deleted — do not reintroduce**. Yaza's `DYNAMODB_*` names survive as aliases in `get_settings()` (`DYNAMODB_SOURCE_REGISTRY_TABLE`→registry, `DYNAMODB_ACCESS_CONTROL_TABLE`→permissions, `DYNAMODB_DRAFT_VERSIONS_TABLE`→drafts) so his runbook still works.
-- **CDK creates all 7 tables** (`_build_dynamodb_tables`); it does not import script-provisioned ones, because CloudFormation cannot adopt them. `setup_dynamodb_tables.sh` is the DynamoDB-only path for when a full `cdk deploy` (OpenSearch Serverless + Bedrock KB) is too slow/costly; it verifies key schemas and refuses to touch a mismatched table rather than silently leaving one the backend cannot read.
-- **Latent bugs fixed (all AWS-only — none reachable on the SQLite path):**
-  - `_timestamp` couldn't parse Pydantic's trailing `Z` (`datetime.fromisoformat` only accepts it on 3.11+; this venv is 3.10).
-  - `_ddb_encode` emitted `{"N": "True"}` for booleans since `bool` subclasses `int`. Test bools/ints first if you extend it; it still cannot represent lists — that's why feedback/recurring use the resource API instead.
-  - `list_feedback`/`list_questions` passed `Limit` to a **filtered** Scan and ignored `LastEvaluatedKey`. DynamoDB applies `Limit` to items *evaluated*, before filtering, so matches beyond the first page vanished silently. Both now use `_scan_all()`, which pages to exhaustion and never passes `Limit`; callers sort then slice. Regression tests in `test_feedback.py` fail against the old code — keep them.
-  - All five low-level stores built `boto3.client("dynamodb", ...)` directly, so `DYNAMODB_ENDPOINT_URL` reached only 2 of 7 stores. Every store now goes through `dynamodb_client.get_dynamodb_client()`; **do not construct boto3 DynamoDB clients directly.**
-- Found by a Codex review pass, which also caught that `README.md`'s DynamoDB section still documented the deleted `APP_ENV`/`APP_PERSISTENCE_BACKEND` switch and told operators to create the conflict table with a `conflict_id` key — both would have broken a real deploy. Section rewritten.
-- Chat logs the recurring question **before** `shape_response_for_role`, so aggregates are role-independent.
-- Stale doc warning: `Yaza_DynamoDB_Work_Summary.md` §3/§4/§7/§10/§11 describe the pre-merge design. Its top integration note is current; the body is kept as his build record.
-
-## AWS-Readiness Conformance Pass (2026-07-15, late)
-Audited the app against the Notion PRD + implementation2.md for "ready to connect to AWS".
-The baseline was already green (107 tests, tsc clean, vite build), so these were conformance
-and wiring gaps, not build breaks. Verifier is now **113 backend tests** (107 baseline, +2 drafting
-regression, +3 guardrail gating, +1 registry source-type).
-- **Bedrock Guardrails implemented — they did not exist at all** (`grep -ri guardrail` returned
-  zero hits repo-wide despite Notion §9 specifying them in full). `infra/stacks/policy_intelligence_stack.py::_build_guardrail()`
-  creates a `CfnGuardrail` + `CfnGuardrailVersion`: content filters (hate HIGH/MEDIUM, insults
-  MEDIUM/LOW, sexual HIGH/LOW, violence HIGH/MEDIUM, misconduct MEDIUM/LOW, prompt-attack
-  HIGH/NONE), all 8 denied topics, contextual grounding at 0.80, PII `ANONYMIZE`, and the PRD's
-  verbatim blocked message. Gated by `BEDROCK_GUARDRAIL_ID` / `BEDROCK_GUARDRAIL_VERSION`
-  (`Settings.guardrails_aws`); `StrandsLLM` builds a `BedrockModel` with the guardrail when set
-  and is byte-for-byte unchanged when unset. **Output filters are deliberately looser than input**
-  — a blanket HIGH would block the harassment/weapons/misconduct policies the assistant exists
-  to explain. Do not "harden" them without re-reading Notion §9.
-  - `PROMPT_ATTACK` output strength must stay `NONE`; the Bedrock API rejects any other value.
-- **Fixed: AI-assisted drafting could never reach Bedrock.** `drafting.py::llm_revision` imported
-  the module-level `llm.generate` (which always raises by design) instead of using the pipeline's
-  selected LLM, so `revise_draft`'s `except Exception` silently fell back to deterministic text even
-  with Strands + KB fully configured. It now takes an `LLM` param and `revise_draft` passes
-  `pipeline.llm`. Regression tests in `test_drafting.py` fail against the old code — keep them.
-- **CORS is now configurable** via `FRONTEND_ORIGINS` (`config.py::allowed_origins()`); it was
-  hardcoded to four localhost origins, which broke any second worktree on a non-default Vite port.
-  Defaults unchanged. Deployed CORS is unaffected — API Gateway + the Lambda Function URL handle
-  it from `cdk deploy -c frontendOrigin=...`, so this seam is local-dev only.
-- **Corrected a false Stack claim.** CLAUDE.md said "all Bedrock calls isolated in `llm.py` — Titan
-  V2 + Claude Converse API". Untrue: `llm.py` is the *local* seam (hash embeddings; `generate()`
-  raises) and holds no boto3 Bedrock client. Real Bedrock calls live in `retrieval.py` (KB
-  `retrieve`) and via Strands in `agents/factory.py`; Titan V2 embedding is the KB's, configured in CDK.
-- **Fixed: the in-app role switcher desynced identity from role.** `require_reviewer` resolves the
-  demo role from `X-User-Email` **in preference to** `X-Role` (an if/elif chain in `auth.py`), but
-  `RoleSwitcher.changeRole` only called `setRole()` and left `policy-intelligence.user-email` at
-  whatever login stored. So logging in as Employee and clicking the prominent "Policy Maker view"
-  button gave a reviewer *view* with an employee *identity* → every reviewer-only endpoint 403'd
-  (`/api/permissions`, `/api/conflicts`), and Sources showed "No grants yet". `api.ts` now exports
-  `setDemoIdentity(role)` / `demoEmailForRole(role)`, used by both `login()` and the switcher, so the
-  two can't drift. Verified in-browser: employee → Policy Maker view now yields zero console errors
-  and a populated permissions table. **If you change one, change both** — or keep using the helper.
-- **Fixed: local registry seeding typed every corpus source as `uploads`.** `register_document`
-  whitelists `source_type` to {handbook, cba, policystat, catalog, uploads}, but corpus front matter
-  carries prose ("handbook excerpt") and PDFs carry none, so all 16 seeds silently degraded to
-  `uploads` (Handbook shown as "UPLOADS", per-source-type permissions undemoable). `registry.py`
-  now has `_SEED_TYPE_BY_STEM` mirroring the AWS authority in `infra/scripts/prepare_corpus.py`
-  (`CORPUS_SOURCES`), applied by `seed_registry_from_corpus`. Verified live: counts became
-  3 handbook / 3 cba / 3 policystat / 7 uploads. **Two-place taxonomy — keep registry.py and
-  prepare_corpus.py in step.** (Tim chose this over editing corpus front matter, which wouldn't help PDFs.)
-- **Verified in-browser (local, zero AWS)**: both roles across /login, /chats, /chats/:id, /library,
-  /topics, /catalog, /sources, /conflicts, /reviews, /review, /drafts — zero console errors after the
-  fix. Role-gated conflicts confirmed at the API: reviewer gets `sources` + `conflict_id`; employee
-  gets the softened escalation with both stripped. PRD calibration case #2 (new AI policy) passes —
-  it flags existing coverage and recommends amending, with the full 6-agent trace rendered.
-- **PRD divergence, deliberate — do not "fix"**: Notion §7's headline calibration case expects
-  *service credit toward the tenure clock* to be a CBA-vs-Handbook **conflict**. The app answers that
-  the two sources **align** (both cap at two years), because they genuinely do in the supplied text.
-  `data/corpus/synthetic-handbook-service-credit.md` says so explicitly: "It is intentionally not
-  labeled a conflict." Manufacturing that conflict would violate the demo-honesty constraint. The
-  WPAF case (Handbook Appendix G vs RES 252644) is the one that demos a real conflict.
-- **Known deliberate gaps** (Notion §9 anti-hallucination list): self-consistency (run detection
-  2–3× and only surface conflicts that reproduce) and negative controls are NOT implemented.
-  Self-consistency would triple Bedrock latency against API Gateway's ~29s cap — hence
-  `VITE_AGENT_BASE_URL`. Implemented already: programmatic span verification (`agents/verification.py`,
-  the PRD's "single biggest lever"), blind parallel extractors, structured outputs, abstention.
-
-## Teammate MVP Branch Merge (2026-07-16)
-Merged PR #4 (`feature/mvp-permissions-citation-links`) into `main` (real merge commit) and hardened it.
-Verifier is now **128 backend tests** (127 at merge, +1 regression for `build_chunks` skipping
-unreadable corpus files — added 2026-07-16 since the skip fix previously had no direct coverage)
-+ `cd frontend && npx tsc --noEmit && npm run build`.
-- **What the branch adds:** enforced source archive/unarchive lifecycle (registry-backed, retrieval drops
-  archived), per-user source permissions on uploads/lifecycle (`authorize_source_write` replaces the old
-  blanket `require_can_add_sources`), canonical/section links on citations and catalog entries
-  (`canonical_url`/`section_url` through ingest → index → retrieval → chat, registry `section_index`
-  overrides), and a persistent reviewer drafting workspace (save/reopen/compare/restore, SQLite locally,
-  DynamoDB + S3 copy under `drafts/{id}/v{n}.md` when `DDB_DRAFTS_TABLE`/corpus bucket are set).
-- **Conflict resolution:** `drafting.py::llm_revision` keeps main's `llm: LLM` first param (revision must
-  reach the pipeline's selected Bedrock LLM — the fe4cb1a fix) *and* the branch's `instruction` param.
-- **Startup now re-indexes the corpus every boot** (branch removed the `INDEX.size == 0` guard,
-  deliberately — a persisted index can be stale). Consequence: corrupt corpus files must not crash
-  startup, so `build_chunks` skips unreadable files with a warning. AWS mode (`BEDROCK_KB_ID`) skips
-  local indexing entirely.
-- **Post-merge hardening (Codex-reviewed twice):** draft routes are owner-scoped — reads/appends/
-  restores/compares 403 on another user's draft unless the requester is `ADMIN_EMAIL`; `list_drafts` is
-  filtered per requester; appends by the admin preserve the original owner (regression-tested). The
-  three remaining `datetime.fromisoformat` call sites (drafting/permissions/registry) now use
-  `stores._timestamp` (Python 3.10 trailing-Z issue). `apply_registry_policy` logs a warning when the
-  registry is unreachable instead of silently passing results through.
-- **Accepted trade-offs (reviewed, deliberately not "fixed"):** registry-failure retrieval stays
-  fail-open (availability over strictness, documented in the docstring); draft ownership check and
-  append are not atomic (single-process demo); 403 vs 404 leaks draft existence to reviewers; headerless
-  local requests resolve to the `local-reviewer` identity and pass permission checks (documented round-2
-  design). Codex's "rtp/ taxonomy drift" finding was a false positive — `prepare_corpus.py`'s second
-  field is an S3 prefix vocabulary, not the registry taxonomy; rtp files seeding as `uploads` locally is
-  the verified 3/3/3/7 split.
-
-## Variance Layer (2026-07-15, `lambda-variance-spec` branch)
-Implements the smallest MVP slice of `lambdaspec.md`: a soft "policy variance" re-labeling of the existing pipeline output. **Layer over, never a fork** — reads `PipelineResult`, re-labels, logs; does not re-implement retrieval or verification. Verifier is now **130 backend tests** (128 + 2 no-variance/live-shape regressions) + `cd frontend && npx tsc --noEmit && npm run build`.
-- **New:** `backend/app/agents/variance.py` — `VarianceSeverity` (7-value Literal), `VarianceItem`/`VarianceReport` (Pydantic), pure `classify_severity(analysis)`, `detect_variance(question, result)`, `soft_language(report, role)`, `log_variance(report, store=None)`. Constants `SOFT_SUMMARY` and `VARIANCE_ESCALATION`. Plus `backend/tests/test_variance.py`.
-- **Escalation wording decided:** `VARIANCE_ESCALATION` uses the PRD denied-topic string *"consult your dean, the Provost's office, or the appropriate office"* — NOT the customer's "Faculty Affairs / Labor Relations" ask, which contradicts the governing PRD (lambdaspec.md §9/§15 Q2).
-- **Authority is derived, not extracted, and reviewer-only:** `authority_rank` comes from a `doc_type` lookup (`cba` 100 > `handbook` 60 > `policystat` 40 > `catalog` 20, default 10) read off the already-retrieved `GroundedPassage` — **no schema change, no LLM pass**. `soft_language(role="employee")` returns only the soft summary + escalation; the existing `shape_response_for_role` still strips sources/ids from the `ConflictSignal`. Employees never see source names in the *attribution*, severity, or authority.
-- **Wiring:** `chat.py` `_agent_grounded_answer(result, question, store=None)` calls `detect_variance` → `log_variance` → attaches `soft_language(reviewer)` to `ConflictSignal.guidance`. Wire contract (`ConflictSignal`/`ChatResponse`) unchanged → zero frontend change. Retrieval widened: `chat.py` local-index `k=6`→`k=12`, `agents/pipeline.py` `_retrieve` `k=10`→`k=12` (lambdaspec.md §6-7).
-- **Logging fallback:** `log_variance` reuses the idempotent `conflict_store().create_or_get`; a store failure is caught and downgraded to a `logger.warning` (CloudWatch) so a logging failure never fails the chat response (lambdaspec.md §11). Zero new AWS resources/IAM/env vars — reuses `DDB_CONFLICTS_TABLE`/`BEDROCK_KB_ID`.
-- **Live no-variance guardrails (2026-07-16):** two crashes/false-positives that only manifested on the live authoritative Bedrock path (locally masked because `llm.generate` raises → deterministic fallback fabricates contradictions for every question):
-  - `detect_variance` now abstains unless ≥2 distinct grounded sources exist (lambdaspec.md §7). A single benign `may` claim on a normal informational question ("What is the purpose of the University Handbook?") no longer manufactures a false variance, logs, or adds soft language.
-  - `AgentPipeline._verify` coerces a non-object verifier response (a live model answering the "return JSON {..}" instruction with an array/scalar) to an unconfirmed verification instead of letting `parsed.get(...)` raise `AttributeError` → 500.
-- **Deferred per §15 (not built):** dedicated variance table (Q4), async log-writer Lambda (Q6), variance on `/api/check-resolution` (Q7), self-consistency N-run gate (Q10), hybrid/rerank (Q11), section re-chunking + KB re-ingest (Q12).
-- **Local verifier note:** this shell injects `BEDROCK_KB_ID`/`AWS_REGION`/`AWS_PROFILE` via Claude Code's own Bedrock config (`CLAUDE_CODE_USE_BEDROCK=1`), which flips the app into AWS mode. Run tests with those unset: `env -u BEDROCK_KB_ID -u AWS_REGION -u AWS_PROFILE python -m pytest backend/tests -q`. The local index must be built first (`python -m backend.scripts.build_index`).
+Installed locally: fastapi, uvicorn, pypdf, numpy, python-multipart; Vite react-ts, tailwindcss,
+react-router-dom. Approved but not yet installed (all imports lazy/guarded — tests pass without
+them): boto3, mangum, strands-agents, aws-cdk-lib.
 
 ## Answer Synthesis + Generation Gate (2026-07-16, `lambda-variance-spec` branch)
 Fixed a response-formatting regression where chat returned **raw retrieved chunks** as the
@@ -224,7 +227,21 @@ minus overlaps; net counted live).
   A KB ID with no model access still degrades to the safe message, not a crash.
 
 ## Last Updated
-2026-07-16 — Answer synthesis + generation-gate fix on `lambda-variance-spec`: chat no longer dumps
+2026-07-16 — **Merged `origin/main` into `lambda-variance-spec` and resolved conflicts favoring the
+`lambda-variance-spec` generation design** (KB alone → live answers via Strands or a boto3 `converse`
+fallback; fast-model split; bounded Bedrock timeouts). `config.py`, `agents/factory.py`, and the
+generation-coupled tests (`test_agents.py`, `test_guardrails.py`, `test_aws_modes.py`) were taken
+from HEAD; `origin/main`'s discarded `BEDROCK_GENERATION_ENABLED` / `bedrock_streaming` gate and
+`_DeterministicLLM` seam did not survive. `origin/main`'s docs reorg (below) was preserved.
+
+2026-07-16 — **Docs reorganization** (from `origin/main`). Added `PROJECT_SCOPE.md` (the condensed
+cold-start entry doc) and rewrote this `CLAUDE.md` down under 15KB, preserving every load-bearing
+fact while compressing the five per-session merge narratives (DynamoDB, PR #4, feature/rag, variance,
+conformance pass) into the "Merge & Decision History" section. Historical specs/plans/ledgers moved
+to `docs/archive/`; living docs stayed in place. See `PROJECT_SCOPE.md` for the full
+living-vs-archive map and `git log` for prior per-session detail.
+
+Previous: 2026-07-16 — Answer synthesis + generation-gate fix on `lambda-variance-spec`: chat no longer dumps
 raw retrieved chunks; informational questions get LLM-synthesized cited answers instead of abstaining
 (verified against real Bedrock); the KB-without-Strands tripwire is closed via a boto3 `converse`
 fallback. Verifier now **166 backend tests**. See the Answer Synthesis + Generation Gate section.

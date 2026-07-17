@@ -20,6 +20,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SOURCE_ROOT = REPO_ROOT / "data" / "corpus"
 MANAGED_CORPUS_PREFIXES = {"handbook", "cba", "resolutions", "synthetic"}
+BEDROCK_CORPUS_ROOT = "corpus"
 
 
 @dataclass(frozen=True)
@@ -97,7 +98,7 @@ def build_staging_tree(source_root: Path, staging_root: Path) -> None:
     validate_manifest(source_root)
     for source in CORPUS_SOURCES:
         source_path = source_root / source.relative_path
-        destination = staging_root / source.prefix / source_path.name
+        destination = staging_root / BEDROCK_CORPUS_ROOT / source.prefix / source_path.name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_path, destination)
         metadata_path = destination.with_name(destination.name + ".metadata.json")
@@ -134,7 +135,7 @@ def _registry_item(source: CorpusSource) -> dict[str, dict[str, str]]:
         "canonical_url": {"S": ""},
         "edition_year": {"S": ""},
         "is_current": {"N": "1"},
-        "s3_key": {"S": f"{source.prefix}/{filename}"},
+        "s3_key": {"S": f"{BEDROCK_CORPUS_ROOT}/{source.prefix}/{filename}"},
         "passages": {"N": "0"},
         "updated_at": {"S": datetime.now(timezone.utc).isoformat()},
     }

@@ -354,11 +354,19 @@ export async function askQuestion(text: string, role: Role = "reviewer"): Promis
   }, AGENT_REQUEST_TIMEOUT_MS, agentBaseUrl);
   if (backend !== null) {
     const paragraphs = backend.answer.split(/\n\s*\n/).filter(Boolean);
+    const heading = paragraphs[0]?.split(/[.!?]\s/)[0] ?? "Grounded policy response";
+    // The heading is the first sentence of the answer; strip that sentence from
+    // the body so it isn't shown twice (once as the headline, once as body text).
+    if (paragraphs[0] !== undefined) {
+      const remainder = paragraphs[0].slice(heading.length).replace(/^[.!?]\s*/, "").trim();
+      if (remainder) paragraphs[0] = remainder;
+      else paragraphs.shift();
+    }
     return {
       answerId: backend.answer_id,
       mode: backend.mode,
       question,
-      heading: paragraphs[0]?.split(/[.!?]\s/)[0] ?? "Grounded policy response",
+      heading,
       paragraphs,
       citations: backend.citations.map((citation) => ({
         id: citation.id,

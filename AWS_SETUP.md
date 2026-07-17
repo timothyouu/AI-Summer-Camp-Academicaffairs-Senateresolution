@@ -2,7 +2,10 @@
 
 Everything on branch `prod` runs locally today with zero AWS. This file is the
 complete, ordered list of manual steps that turn on the real architecture from
-`implementation2.md`. Nothing else is required — no code changes.
+`docs/archive/implementation2.md`. Nothing else is required — no code changes.
+
+See also `implementation-aws.md` (AWS account/access onboarding) and
+`infra/README.md` (CDK stack internals and Stack Outputs table).
 
 ## 0. One-time installs (hook-blocked for Claude; run these yourself)
 
@@ -49,7 +52,7 @@ spin up just to exercise persistence:
 If setup reports a key-schema mismatch, that table is left over from the
 app-memory round and the backend cannot read it — the script prints the scan and
 delete commands rather than changing anything itself. See the integration note in
-`Yaza_DynamoDB_Work_Summary.md`.
+`docs/archive/Yaza_DynamoDB_Work_Summary.md`.
 
 ```bash
 source backend/.venv/bin/activate
@@ -64,10 +67,12 @@ OpenSearch Serverless custom-resource notes) is in `infra/README.md`.
 ## 3. Post-deploy (from `infra/README.md`, summarized)
 
 1. From the repository root, validate the explicit source mapping, then upload
-   the corpus and generated Bedrock metadata sidecars under the KB's included
-   prefixes. Do not use a raw `aws s3 cp data/corpus ... --recursive`: most
-   supplied files are flat, so that command puts them outside the configured
-   `handbook/`, `cba/`, `resolutions/`, and `synthetic/` prefixes.
+   the corpus and generated Bedrock metadata sidecars. The Bedrock data source
+   has one inclusive prefix, `corpus/`; the helper preserves the reviewed
+   taxonomy beneath it as `corpus/handbook/`, `corpus/cba/`,
+   `corpus/resolutions/`, and `corpus/synthetic/`. Do not use a raw
+   `aws s3 cp data/corpus ... --recursive`: most supplied files are flat, so
+   that command loses this taxonomy and omits the metadata sidecars.
 
    ```bash
    backend/.venv/bin/python infra/scripts/prepare_corpus.py
@@ -75,13 +80,19 @@ OpenSearch Serverless custom-resource notes) is in `infra/README.md`.
      --stack-name PolicyIntelligenceStack \
      --query "Stacks[0].Outputs[?OutputKey=='CorpusBucketName'].OutputValue | [0]" \
      --output text)"
-   backend/.venv/bin/python infra/scripts/prepare_corpus.py --bucket "$CORPUS_BUCKET"
+   export DDB_REGISTRY_TABLE="$(aws cloudformation describe-stacks \
+     --stack-name PolicyIntelligenceStack \
+     --query "Stacks[0].Outputs[?OutputKey=='DdbRegistryTable'].OutputValue | [0]" \
+     --output text)"
+   backend/.venv/bin/python infra/scripts/prepare_corpus.py \
+     --bucket "$CORPUS_BUCKET" --registry-table "$DDB_REGISTRY_TABLE"
    ```
 
    The helper refuses undeclared or missing corpus files, preserves each
-   source's document type in metadata, and generates the `.metadata.json`
-   sidecar fields consumed by retrieval: `source`, `section`, `doc_type`, and
-   `topic`.
+   source's document type in metadata, generates the `.metadata.json` sidecar
+   fields consumed by retrieval (`source`, `section`, `doc_type`, and `topic`),
+   and idempotently registers the supplied sources as active without
+   reactivating a source that an administrator previously archived.
 2. Run the initial Knowledge Base sync once:
    `aws bedrock-agent start-ingestion-job --knowledge-base-id <BedrockKbId> --data-source-id <BedrockDataSourceId>`
    (later uploads auto-sync via the S3-event ingestion Lambda).
@@ -97,11 +108,8 @@ OpenSearch Serverless custom-resource notes) is in `infra/README.md`.
    backend/.venv/bin/python -m backend.scripts.seed_conflicts
    ```
 
-4. Create the employee, maker, and source-admin Cognito users and add them to
-   the `employees`, `makers`, and `admins` groups respectively (exact
-   `aws cognito-idp` commands in `infra/README.md`). Only `admins` can manage
-   grants; makers need a matching `can_edit` grant or source ownership to
-   archive, activate, or replace a source.
+4. Leave Cognito unset for the current demo deployment. Authentication stays
+   in demo-header mode; no Cognito users or groups need to be created.
 5. Console-test retrieval: KB `retrieve` for "service credit tenure clock".
 
 ## 4. Backend env vars (the "drop the key" moment)
@@ -126,6 +134,7 @@ file without exporting it does not change modes.
 |---|---|
 | `AWS_REGION` | region for all AWS clients |
 | `BEDROCK_KB_ID` | Bedrock KB retrieval (replaces NumPy index) + Strands mode (if `strands` installed) |
+| `BEDROCK_MODEL_ID` | Strands generation model; deployed default is the SCP-compatible US regional profile `us.anthropic.claude-sonnet-4-6` |
 | `BEDROCK_GUARDRAIL_ID` | Bedrock Guardrails for Strands generation |
 | `BEDROCK_GUARDRAIL_VERSION` | pinned Bedrock Guardrail version used by Strands generation |
 | `DDB_CONFLICTS_TABLE` | DynamoDB conflict log (replaces SQLite) |
@@ -135,7 +144,7 @@ file without exporting it does not change modes.
 | `DDB_DRAFTS_TABLE` | DynamoDB versioned drafting history (replaces SQLite) |
 | `CORPUS_BUCKET` | presigned S3 PUT uploads + event-driven ingestion |
 | `COGNITO_USER_POOL_ID` + `COGNITO_CLIENT_ID` | Cognito JWT auth, roles from `cognito:groups` (replaces demo accounts) |
-| `FRONTEND_ORIGINS` | comma-separated CORS origins for the FastAPI app itself. Local-only: deployed CORS comes from `cdk deploy -c frontendOrigin=...` (API Gateway + Function URL). Unset ⇒ the default localhost dev origins. |
+| `FRONTEND_ORIGINS` | comma-separated CORS origins for FastAPI itself. CDK injects it into the API Lambda from `frontendOrigin`, keeping FastAPI, API Gateway, and the Function URL aligned. Set it directly only for local overrides; unset ⇒ default localhost dev origins. |
 
 For the demo, Cognito remains optional and OFF. With Cognito unset, conflict
 visibility uses the frontend's demo `X-Role` header (and defaults to reviewer
@@ -145,8 +154,11 @@ the backend `COGNITO_*` variables and frontend `VITE_USE_COGNITO=true` are set.
 ## 5. Frontend env vars
 
 Template: `frontend/.env.example`. Set `VITE_API_BASE_URL` to the `ApiUrl`
-output; set `VITE_AGENT_BASE_URL` to the `AgentFunctionUrl` output (see the
-note below); for real sign-in set `VITE_USE_COGNITO=true` plus
+output and `VITE_AGENT_BASE_URL` to the `AgentFunctionUrl` output (see the
+note below). For the current Cognito-off deployment, leave
+`VITE_USE_COGNITO`, `VITE_COGNITO_DOMAIN`, `VITE_COGNITO_CLIENT_ID`, and
+`VITE_REDIRECT_URI` unset. A future real-sign-in deployment can set
+`VITE_USE_COGNITO=true` plus
 `VITE_COGNITO_DOMAIN`, `VITE_COGNITO_CLIENT_ID`, `VITE_REDIRECT_URI`
 (hosted UI values from the stack outputs). Unset ⇒ demo login unchanged.
 
@@ -165,15 +177,16 @@ authenticated. If `VITE_AGENT_BASE_URL` is unset, both calls fall back to
 `VITE_API_BASE_URL` — fine locally, but under a real HTTP API a slow pipeline
 would 5xx at ~29s, so set it for the AWS demo.
 
-Set `VITE_REDIRECT_URI` to the deployed frontend's exact callback URL, for
-example `https://main.dXXXXXXXXXXXX.amplifyapp.com/auth/callback`. Once that
+If Cognito is enabled later, set `VITE_REDIRECT_URI` to the deployed frontend's
+exact callback URL, for example
+`https://prod.dXXXXXXXXXXXX.amplifyapp.com/auth/callback`. Once that
 frontend origin is known, register the same origin in Cognito and both API CORS
 policies by redeploying from the repository root:
 
 ```bash
 source backend/.venv/bin/activate
 cd infra
-cdk deploy -c frontendOrigin=https://main.dXXXXXXXXXXXX.amplifyapp.com
+cdk deploy -c frontendOrigin=https://prod.dXXXXXXXXXXXX.amplifyapp.com
 ```
 
 Use the exact scheme and host with no trailing slash in `frontendOrigin`.
@@ -198,10 +211,12 @@ other client routes return a hosting 404 before React can route them.
 
 1. `backend`: run the API locally with the env vars set — ask the service-credit
    question; expect KB-backed citations.
-2. Upload a small PDF via the UI — status should go pending → ingesting → ready,
-   then answer a question from it.
-3. Sign in via the hosted UI as each demo user — employee vs reviewer routing
-   should follow the Cognito group.
+2. Upload a small PDF via the UI — status should go pending → ingesting → ready.
+   Uploads intentionally register under `corpus/uploads/` as **archived**, so
+   after ingestion open **Sources > Archive** and choose **Unarchive** before
+   expecting the document to power answers.
+3. Use the demo employee and reviewer logins; role routing should follow the
+   frontend's `X-Role` header while Cognito is off.
 
 ## 7. Catalog scrape
 
@@ -235,8 +250,9 @@ aws lambda invoke --function-name "$CATALOG_SCRAPER_FUNCTION" \
   --cli-binary-format raw-in-base64-out response-archived.json
 ```
 
-The scraper writes both the Markdown and Bedrock metadata sidecars under the
-included `raw/` prefix. Start one Knowledge Base ingestion job after both
+The scraper writes both the Markdown and Bedrock metadata sidecars under
+`corpus/raw/catalog/`, inside the data source's single `corpus/` prefix. Start
+one Knowledge Base ingestion job after both
 invocations so the new catalog pages become retrievable:
 
 ```bash

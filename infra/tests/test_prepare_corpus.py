@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from infra.scripts.prepare_corpus import (
+    BEDROCK_CORPUS_ROOT,
     CORPUS_SOURCES,
     DEFAULT_SOURCE_ROOT,
     MANAGED_CORPUS_PREFIXES,
@@ -28,7 +29,7 @@ class PrepareCorpusTests(unittest.TestCase):
         )
         cdk_prefixes = {prefix.rstrip("/") for prefix in ast.literal_eval(value)}
 
-        self.assertEqual(cdk_prefixes, MANAGED_CORPUS_PREFIXES | {"uploads", "raw"})
+        self.assertEqual(cdk_prefixes, {BEDROCK_CORPUS_ROOT})
         self.assertEqual({source.prefix for source in CORPUS_SOURCES}, MANAGED_CORPUS_PREFIXES)
 
     def test_every_source_is_staged_under_a_kb_prefix_with_metadata(self) -> None:
@@ -37,7 +38,7 @@ class PrepareCorpusTests(unittest.TestCase):
             build_staging_tree(DEFAULT_SOURCE_ROOT, staging_root)
 
             for source in CORPUS_SOURCES:
-                destination = staging_root / source.prefix / Path(source.relative_path).name
+                destination = staging_root / BEDROCK_CORPUS_ROOT / source.prefix / Path(source.relative_path).name
                 self.assertTrue(destination.is_file())
                 metadata = json.loads(
                     destination.with_name(destination.name + ".metadata.json").read_text(encoding="utf-8")
@@ -63,7 +64,7 @@ class PrepareCorpusTests(unittest.TestCase):
             self.assertEqual(item["id"]["S"], Path(filename).stem.lower())
             self.assertEqual(item["title"]["S"], Path(filename).stem)
             self.assertEqual(item["status"]["S"], "active")
-            self.assertEqual(item["s3_key"]["S"], f"{source.prefix}/{filename}")
+            self.assertEqual(item["s3_key"]["S"], f"{BEDROCK_CORPUS_ROOT}/{source.prefix}/{filename}")
 
 
 if __name__ == "__main__":

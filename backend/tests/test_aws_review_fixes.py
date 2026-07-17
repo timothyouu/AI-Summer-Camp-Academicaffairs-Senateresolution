@@ -98,8 +98,8 @@ def test_ingestion_conflict_leaves_uploads_pending_without_job(monkeypatch: Any)
     monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *_args, **_kwargs: bedrock))
 
     response = ingestion.handler({"Records": [
-        {"s3": {"object": {"key": "uploads%2Fupload-1%2Fhandbook.pdf"}}},
-        {"s3": {"object": {"key": "uploads%2Fupload-2%2Fpolicy.md"}}},
+        {"s3": {"object": {"key": "corpus%2Fuploads%2Fupload-1%2Fhandbook.pdf"}}},
+        {"s3": {"object": {"key": "corpus%2Fuploads%2Fupload-2%2Fpolicy.md"}}},
     ]}, object())
 
     assert response == {"processed": 2}
@@ -135,7 +135,7 @@ def test_ingestion_maps_upload_id_and_filename_from_s3_key(monkeypatch: Any) -> 
     monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *_args, **_kwargs: BedrockClient()))
 
     result = ingestion.handler({"Records": [{"s3": {"object": {
-        "key": "uploads%2F4f38dd5d-abc%2FFaculty+Handbook.pdf",
+        "key": "corpus%2Fuploads%2F4f38dd5d-abc%2FFaculty+Handbook.pdf",
     }}}]}, object())
 
     assert result == {"processed": 1}
@@ -203,13 +203,13 @@ def test_ingestion_rejects_oversized_objects_before_starting_jobs(monkeypatch: A
 
     result = ingestion.handler({"Records": [{"s3": {
         "bucket": {"name": "corpus-bucket"},
-        "object": {"key": "uploads%2Fbig-1%2Fhuge.pdf", "size": MAX_UPLOAD_BYTES + 1},
+        "object": {"key": "corpus%2Fuploads%2Fbig-1%2Fhuge.pdf", "size": MAX_UPLOAD_BYTES + 1},
     }}]}, object())
 
     assert result == {"processed": 1}
     assert store.calls[0]["status"] == "failed"
     assert "limit" in str(store.calls[0]["error"])
-    assert s3_client.deleted == [{"Bucket": "corpus-bucket", "Key": "uploads/big-1/huge.pdf"}]
+    assert s3_client.deleted == [{"Bucket": "corpus-bucket", "Key": "corpus/uploads/big-1/huge.pdf"}]
 
 
 def test_ingestion_conflict_preserves_actively_ingesting_records(monkeypatch: Any) -> None:
@@ -248,8 +248,8 @@ def test_ingestion_conflict_preserves_actively_ingesting_records(monkeypatch: An
     monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(client=lambda *_args, **_kwargs: BedrockClient()))
 
     result = ingestion.handler({"Records": [
-        {"s3": {"object": {"key": "uploads%2Fupload-1%2Fhandbook.pdf"}}},
-        {"s3": {"object": {"key": "uploads%2Fupload-2%2Fpolicy.md"}}},
+        {"s3": {"object": {"key": "corpus%2Fuploads%2Fupload-1%2Fhandbook.pdf"}}},
+        {"s3": {"object": {"key": "corpus%2Fuploads%2Fupload-2%2Fpolicy.md"}}},
     ]}, object())
 
     assert result == {"processed": 2}
