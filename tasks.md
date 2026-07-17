@@ -12,7 +12,8 @@
 - [x] Live CORS, IAM, regional Bedrock model, and Lambda fallback behavior deployed and verified.
 - [x] End-to-end employee chat returned a grounded answer with Handbook and Unit 3 CBA citations.
 - [ ] Connect Amplify to GitHub for automatic `prod` branch deployments (requires GitHub authorization/token).
-- [ ] Run a full live upload → ingestion → unarchive → retrieval verification.
+- [x] Live upload reached `ready`, was unarchived to Active, and appeared in the deployed Sources UI.
+- [ ] Enable Docker Desktop WSL integration for `Ubuntu-22.04`, then run one CDK reconciliation deploy so CloudFormation formally records the already-live Lambda/IAM hotfixes.
 
 
 Deployment punch-list from the 2026-07-16 repo audit. The code is ship-ready:

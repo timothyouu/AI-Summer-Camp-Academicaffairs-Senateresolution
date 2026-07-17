@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
-from queue import Empty, Queue
-from threading import Lock, Thread
+from threading import Lock
 from typing import Any
 
 from ..config import get_settings
@@ -22,9 +21,13 @@ _GUARDRAIL_REFUSAL_MARKER = (
     "i can help you find and understand existing policy, but i can't help with that"
 )
 
-
-class _RecoverableStrandsError(RuntimeError):
-    """A provider outcome that should open the per-request fallback circuit."""
+_BEDROCK_CONNECT_TIMEOUT_SECONDS = 3
+_BEDROCK_TRANSPORT_ERROR_NAMES = (
+    "ConnectTimeoutError",
+    "ConnectionClosedError",
+    "EndpointConnectionError",
+    "ReadTimeoutError",
+)
 
 
 def strands_available() -> bool:
@@ -45,8 +48,22 @@ class StrandsLLM:
         module = importlib.import_module("strands")
         self._agent_type: Any = getattr(module, "Agent")
         settings = get_settings()
+        self._generation_timeout_seconds = (
+            settings.bedrock_generation_timeout_seconds
+            if generation_timeout_seconds is None
+            else generation_timeout_seconds
+        )
+        if self._generation_timeout_seconds <= 0:
+            raise ValueError("Strands generation timeout must be positive")
         models = importlib.import_module("strands.models")
         model_type: Any = getattr(models, "BedrockModel")
+        botocore_config = importlib.import_module("botocore.config")
+        config_type: Any = getattr(botocore_config, "Config")
+        client_config = config_type(
+            connect_timeout=_BEDROCK_CONNECT_TIMEOUT_SECONDS,
+            read_timeout=self._generation_timeout_seconds,
+            retries={"total_max_attempts": 1, "mode": "standard"},
+        )
         model_kwargs: dict[str, Any] = {
             "model_id": settings.bedrock_model_id,
             "streaming": settings.bedrock_streaming,
@@ -58,15 +75,12 @@ class StrandsLLM:
                 guardrail_id=settings.bedrock_guardrail_id,
                 guardrail_version=settings.bedrock_guardrail_version,
             )
-        self._bedrock_model: Any = model_type(**model_kwargs)
-        self._generation_error_types = _strands_generation_error_types()
-        self._generation_timeout_seconds = (
-            settings.bedrock_generation_timeout_seconds
-            if generation_timeout_seconds is None
-            else generation_timeout_seconds
+        self._bedrock_model: Any = model_type(
+            boto_client_config=client_config,
+            **model_kwargs,
         )
-        if self._generation_timeout_seconds <= 0:
-            raise ValueError("Strands generation timeout must be positive")
+        self._generation_error_types = _strands_generation_error_types()
+        self._transport_error_types = _bedrock_transport_error_types()
         self._circuit_lock = Lock()
         self._disabled_reason: str | None = None
 
@@ -76,14 +90,16 @@ class StrandsLLM:
             disabled_reason = self._disabled_reason
         if disabled_reason is not None:
             raise RuntimeError(f"Strands generation disabled after {disabled_reason}")
-        agent: Any = self._agent_type(model=self._bedrock_model, system_prompt=system)
+        agent: Any = self._agent_type(
+            model=self._bedrock_model,
+            system_prompt=system,
+            callback_handler=None,
+            retry_strategy=None,
+        )
         try:
-            result = self._invoke_with_timeout(agent, user)
-        except _RecoverableStrandsError as exc:
-            self._disable(str(exc))
-            raise RuntimeError(str(exc)) from exc
+            result = agent(user, limits={"max_turns": 1})
         except Exception as exc:
-            if not isinstance(exc, self._generation_error_types):
+            if not isinstance(exc, self._generation_error_types + self._transport_error_types):
                 raise
             reason = f"Strands generation failed: {exc}"
             self._disable(reason)
@@ -100,34 +116,6 @@ class StrandsLLM:
             if self._disabled_reason is None:
                 self._disabled_reason = reason
 
-    def _invoke_with_timeout(self, agent: Any, user: str) -> Any:
-        """Bound one provider call without hiding exceptions from completed calls.
-
-        The Strands call is synchronous and can keep consuming a guardrail refusal
-        stream until the outer Lambda timeout. A daemon worker lets the request
-        fall back deterministically while the provider call is still stalled;
-        completed SDK and programmer exceptions are returned to ``generate`` and
-        retain their existing selective handling.
-        """
-        outcome: Queue[tuple[bool, Any]] = Queue(maxsize=1)
-
-        def invoke() -> None:
-            try:
-                outcome.put((True, agent(user)))
-            except Exception as exc:
-                outcome.put((False, exc))
-
-        Thread(target=invoke, name="strands-generation", daemon=True).start()
-        try:
-            succeeded, value = outcome.get(timeout=self._generation_timeout_seconds)
-        except Empty as exc:
-            raise _RecoverableStrandsError(
-                f"Strands generation exceeded {self._generation_timeout_seconds:g} seconds"
-            ) from exc
-        if not succeeded:
-            raise value
-        return value
-
 
 def _strands_generation_error_types() -> tuple[type[Exception], ...]:
     """Return recoverable SDK generation errors without importing Strands locally."""
@@ -138,6 +126,20 @@ def _strands_generation_error_types() -> tuple[type[Exception], ...]:
     return tuple(
         error_type
         for name in _STRANDS_GENERATION_ERROR_NAMES
+        if isinstance((error_type := getattr(exceptions, name, None)), type)
+        and issubclass(error_type, Exception)
+    )
+
+
+def _bedrock_transport_error_types() -> tuple[type[Exception], ...]:
+    """Return retryable Botocore transport errors without importing AWS locally."""
+    try:
+        exceptions = importlib.import_module("botocore.exceptions")
+    except ImportError:
+        return ()
+    return tuple(
+        error_type
+        for name in _BEDROCK_TRANSPORT_ERROR_NAMES
         if isinstance((error_type := getattr(exceptions, name, None)), type)
         and issubclass(error_type, Exception)
     )
@@ -164,10 +166,21 @@ def _is_repeated_guardrail_refusal(text: str) -> bool:
     return normalized.count(_GUARDRAIL_REFUSAL_MARKER) >= 2
 
 
+class _DeterministicLLM:
+    """Select the pipeline's grounded fallbacks without calling a text model."""
+
+    def generate(self, system: str, user: str, json_mode: bool = False) -> str:
+        del system, user, json_mode
+        raise RuntimeError("Bedrock text generation is disabled; using deterministic analysis")
+
+
 def create_pipeline(*, llm: LLM | None = None) -> AgentPipeline:
-    """Select Strands only when both its SDK and a configured Bedrock KB are present."""
+    """Use KB-grounded deterministic analysis unless generation is opted in."""
     if llm is not None:
         return AgentPipeline(llm=llm)
-    if get_settings().retrieval_aws and strands_available():
-        return AgentPipeline(llm=StrandsLLM(), authoritative=True)
+    settings = get_settings()
+    if settings.retrieval_aws:
+        if settings.bedrock_generation_enabled and strands_available():
+            return AgentPipeline(llm=StrandsLLM(), authoritative=True)
+        return AgentPipeline(llm=_DeterministicLLM(), authoritative=True)
     return AgentPipeline()

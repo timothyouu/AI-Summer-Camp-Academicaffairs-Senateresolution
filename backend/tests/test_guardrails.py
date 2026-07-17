@@ -56,7 +56,8 @@ def test_strands_llm_applies_configured_guardrail(monkeypatch: pytest.MonkeyPatc
         def __init__(self, **kwargs: Any) -> None:
             agent_kwargs.append(kwargs)
 
-        def __call__(self, user: str) -> str:
+        def __call__(self, user: str, **kwargs: Any) -> str:
+            assert kwargs == {"limits": {"max_turns": 1}}
             return user
 
     strands = ModuleType("strands")
@@ -72,15 +73,20 @@ def test_strands_llm_applies_configured_guardrail(monkeypatch: pytest.MonkeyPatc
     llm = StrandsLLM()
     llm.generate("system instructions", "user request")
 
-    assert model_kwargs == [{
+    assert {key: value for key, value in model_kwargs[0].items() if key != "boto_client_config"} == {
         "model_id": "us.test-model",
         "streaming": False,
         "max_tokens": 1024,
         "temperature": 0.0,
         "guardrail_id": "guardrail-123",
         "guardrail_version": "7",
+    }
+    assert agent_kwargs == [{
+        "model": llm._bedrock_model,
+        "system_prompt": "system instructions",
+        "callback_handler": None,
+        "retry_strategy": None,
     }]
-    assert agent_kwargs == [{"model": llm._bedrock_model, "system_prompt": "system instructions"}]
     assert agent_kwargs[0]["model"] is llm._bedrock_model
 
 
@@ -98,7 +104,8 @@ def test_strands_llm_without_guardrail_still_pins_regional_model(
         def __init__(self, **kwargs: Any) -> None:
             agent_kwargs.append(kwargs)
 
-        def __call__(self, user: str) -> str:
+        def __call__(self, user: str, **kwargs: Any) -> str:
+            assert kwargs == {"limits": {"max_turns": 1}}
             return user
 
     strands = ModuleType("strands")
@@ -114,10 +121,15 @@ def test_strands_llm_without_guardrail_still_pins_regional_model(
     llm = StrandsLLM()
     llm.generate("system instructions", "user request")
 
-    assert model_kwargs == [{
+    assert {key: value for key, value in model_kwargs[0].items() if key != "boto_client_config"} == {
         "model_id": "us.test-model",
         "streaming": False,
         "max_tokens": 1024,
         "temperature": 0.0,
+    }
+    assert agent_kwargs == [{
+        "model": llm._bedrock_model,
+        "system_prompt": "system instructions",
+        "callback_handler": None,
+        "retry_strategy": None,
     }]
-    assert agent_kwargs == [{"model": llm._bedrock_model, "system_prompt": "system instructions"}]

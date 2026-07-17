@@ -20,6 +20,15 @@ def test_mode_selection_is_per_integration(monkeypatch: Any) -> None:
     assert not get_settings().conflicts_aws
 
 
+def test_bedrock_generation_requires_explicit_opt_in(monkeypatch: Any) -> None:
+    monkeypatch.delenv("BEDROCK_GENERATION_ENABLED", raising=False)
+    assert get_settings().bedrock_generation_enabled is False
+    monkeypatch.setenv("BEDROCK_GENERATION_ENABLED", "true")
+    assert get_settings().bedrock_generation_enabled is True
+    monkeypatch.setenv("BEDROCK_GENERATION_ENABLED", "false")
+    assert get_settings().bedrock_generation_enabled is False
+
+
 def test_retrieval_maps_knowledge_base_response(monkeypatch: Any) -> None:
     class Client:
         def retrieve(self, **_: object) -> dict[str, object]:

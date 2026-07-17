@@ -58,6 +58,7 @@ class Settings:
     bedrock_max_tokens: int = DEFAULT_BEDROCK_MAX_TOKENS
     bedrock_temperature: float = DEFAULT_BEDROCK_TEMPERATURE
     bedrock_generation_timeout_seconds: float = DEFAULT_BEDROCK_GENERATION_TIMEOUT_SECONDS
+    bedrock_generation_enabled: bool = False
     bedrock_guardrail_id: str | None = None
     bedrock_guardrail_version: str | None = None
     ddb_conflicts_table: str | None = None
@@ -126,6 +127,7 @@ def get_settings() -> Settings:
     """
     value = lambda name: os.getenv(name) or None
     first = lambda *names: next((candidate for name in names if (candidate := value(name))), None)
+    enabled = lambda name: (value(name) or "").strip().lower() in {"1", "true", "yes", "on"}
     return Settings(
         aws_region=value("AWS_REGION"), aws_profile=value("AWS_PROFILE"),
         dynamodb_endpoint_url=value("DYNAMODB_ENDPOINT_URL"),
@@ -134,6 +136,7 @@ def get_settings() -> Settings:
         bedrock_generation_timeout_seconds=float(
             value("BEDROCK_GENERATION_TIMEOUT_SECONDS") or DEFAULT_BEDROCK_GENERATION_TIMEOUT_SECONDS
         ),
+        bedrock_generation_enabled=enabled("BEDROCK_GENERATION_ENABLED"),
         bedrock_guardrail_id=value("BEDROCK_GUARDRAIL_ID"),
         bedrock_guardrail_version=value("BEDROCK_GUARDRAIL_VERSION"),
         ddb_conflicts_table=first("DDB_CONFLICTS_TABLE", "DYNAMODB_CONFLICTS_TABLE"),

@@ -239,3 +239,4 @@ def test_api_lambda_pins_scp_compatible_regional_model() -> None:
 
     assert ast.literal_eval(model_id) == DEFAULT_BEDROCK_MODEL_ID
     assert "'BEDROCK_MODEL_ID': BEDROCK_MODEL_ID" in ast.unparse(method)
+    assert "'BEDROCK_GENERATION_ENABLED': 'false'" in ast.unparse(method)

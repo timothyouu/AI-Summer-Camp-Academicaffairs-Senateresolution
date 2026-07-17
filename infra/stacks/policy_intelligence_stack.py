@@ -909,6 +909,10 @@ class PolicyIntelligenceStack(Stack):
             # by the runtime) — do not set it explicitly.
             "BEDROCK_KB_ID": knowledge_base.attr_knowledge_base_id,
             "BEDROCK_MODEL_ID": BEDROCK_MODEL_ID,
+            # Synchronous Lambda requests use deterministic analysis over KB
+            # passages. Strands generation remains an explicit opt-in because
+            # its nested executors cannot be cancelled at the request boundary.
+            "BEDROCK_GENERATION_ENABLED": "false",
             "BEDROCK_GUARDRAIL_ID": guardrail.attr_guardrail_id,
             "BEDROCK_GUARDRAIL_VERSION": guardrail_version.attr_version,
             "DDB_CONFLICTS_TABLE": conflicts_table.table_name,
