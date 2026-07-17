@@ -353,7 +353,8 @@ def chat(
     if pipeline.authoritative:
         try:
             response = _agent_grounded_answer(
-                pipeline.run(payload.question), payload.question, llm=getattr(pipeline, "llm", None),
+                pipeline.run(payload.question), payload.question,
+                llm=getattr(pipeline, "synthesis_llm", None) or getattr(pipeline, "llm", None),
             )
         except Exception:  # noqa: BLE001 — bounded Bedrock timeout / AWS error.
             # A Bedrock call (retrieval or an agent stage) failed or timed out.

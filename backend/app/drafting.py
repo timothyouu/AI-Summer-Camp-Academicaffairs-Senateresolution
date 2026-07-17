@@ -306,7 +306,8 @@ def revise_draft(
     ]
     try:
         revised, rationale = llm_revision(
-            pipeline.llm, payload.text, conflicts, output.recommendation, payload.instruction,
+            getattr(pipeline, "synthesis_llm", None) or pipeline.llm,
+            payload.text, conflicts, output.recommendation, payload.instruction,
         )
     except Exception:
         revised, rationale = deterministic_revision(

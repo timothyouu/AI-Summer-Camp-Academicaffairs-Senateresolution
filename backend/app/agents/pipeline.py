@@ -56,9 +56,14 @@ class AgentPipeline:
     """Six-stage pipeline. Extractor calls are source-isolated and may run concurrently."""
 
     def __init__(
-        self, llm: LLM | None = None, store: ConflictStore | None = None, *, authoritative: bool = False,
+        self, llm: LLM | None = None, store: ConflictStore | None = None, *,
+        synthesis_llm: LLM | None = None, authoritative: bool = False,
     ) -> None:
         self.llm = llm or ModuleLLM()
+        # LLM for user-facing prose (answer synthesis, draft revision). Defaults
+        # to the mechanical LLM, so callers that don't split models are
+        # unaffected; the fast-model split sets a separate quality model here.
+        self.synthesis_llm = synthesis_llm or self.llm
         self.store = store
         self.authoritative = authoritative
 

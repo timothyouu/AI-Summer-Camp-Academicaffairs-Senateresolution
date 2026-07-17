@@ -22,19 +22,25 @@ class StrandsLLM:
     agent history between pipeline roles.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, model_id: str | None = None) -> None:
         module = importlib.import_module("strands")
         self._agent_type: Any = getattr(module, "Agent")
         self._bedrock_model: Any | None = None
         settings = get_settings()
-        if settings.guardrails_aws:
+        # Build an explicit BedrockModel when a guardrail is set OR a specific
+        # model id is requested (the fast-model split). Otherwise the Agent uses
+        # the SDK default model, unchanged from before.
+        if settings.guardrails_aws or model_id:
+            kwargs: dict[str, Any] = {}
+            if settings.guardrails_aws:
+                kwargs["guardrail_id"] = settings.bedrock_guardrail_id
+                kwargs["guardrail_version"] = settings.bedrock_guardrail_version
+            if model_id:
+                kwargs["model_id"] = model_id
             try:
                 models = importlib.import_module("strands.models")
                 model_type: Any = getattr(models, "BedrockModel")
-                self._bedrock_model = model_type(
-                    guardrail_id=settings.bedrock_guardrail_id,
-                    guardrail_version=settings.bedrock_guardrail_version,
-                )
+                self._bedrock_model = model_type(**kwargs)
             except (ImportError, AttributeError, TypeError):
                 # Older Strands releases may not expose BedrockModel here.
                 self._bedrock_model = None
@@ -59,7 +65,7 @@ class BedrockConverseLLM:
     Guardrail attaches when configured, matching ``StrandsLLM``.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, model_id: str | None = None) -> None:
         import boto3  # type: ignore[import-not-found]  # Lazy: absent in local mode.
 
         settings = get_settings()
@@ -67,7 +73,7 @@ class BedrockConverseLLM:
             "bedrock-runtime", region_name=settings.aws_region,
             config=bedrock_client_config(settings),
         )
-        self._model_id = settings.bedrock_model_id
+        self._model_id = model_id or settings.bedrock_model_id
         self._guardrail: dict[str, Any] | None = None
         if settings.guardrails_aws:
             self._guardrail = {
@@ -112,10 +118,29 @@ def create_pipeline(*, llm: LLM | None = None) -> AgentPipeline:
     Strands SDK is used when installed, otherwise generation falls back to a
     direct boto3 Bedrock ``converse`` call. Only when no KB is configured does
     the pipeline stay fully local (``ModuleLLM``, whose ``generate`` raises).
+
+    When ``BEDROCK_FAST_MODEL_ID`` is set, the pipeline's mechanical stages
+    (extract/detect/verify) run on the fast model while user-facing prose
+    (synthesis, draft revision) stays on ``bedrock_model_id`` via a separate
+    ``synthesis_llm``. Unset -> both are the same instance, byte-for-byte
+    identical to before.
     """
     if llm is not None:
         return AgentPipeline(llm=llm)
-    if get_settings().retrieval_aws:
-        selected: LLM = StrandsLLM() if strands_available() else BedrockConverseLLM()
+    if not get_settings().retrieval_aws:
+        return AgentPipeline()
+    fast_model = get_settings().bedrock_fast_model_id
+    use_strands = strands_available()
+    if not fast_model:
+        # Unchanged path: one model everywhere. Constructors are called with no
+        # args so the generation-gate tests' zero-arg monkeypatches still apply.
+        selected: LLM = StrandsLLM() if use_strands else BedrockConverseLLM()
         return AgentPipeline(llm=selected, authoritative=True)
-    return AgentPipeline()
+    # Split: fast model for mechanical JSON stages, default model for prose.
+    if use_strands:
+        mechanical: LLM = StrandsLLM(fast_model)
+        prose: LLM = StrandsLLM()
+    else:
+        mechanical = BedrockConverseLLM(fast_model)
+        prose = BedrockConverseLLM()
+    return AgentPipeline(llm=mechanical, synthesis_llm=prose, authoritative=True)

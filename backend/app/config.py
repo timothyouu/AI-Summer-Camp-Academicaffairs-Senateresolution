@@ -47,6 +47,13 @@ class Settings:
     bedrock_kb_id: str | None = None
     bedrock_kb_search_mode: str = "vector"
     bedrock_model_id: str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    # Optional cheaper/faster model for the pipeline's mechanical JSON stages
+    # (extract/detect/verify). Unset -> every stage uses bedrock_model_id, i.e.
+    # today's behavior byte-for-byte. Set -> the mechanical stages use this model
+    # while user-facing prose (answer synthesis, draft revision) stays on
+    # bedrock_model_id. Lets Haiku carry the fan-out without touching answer
+    # quality. See CLAUDE.md "Verify tuning follow-ups".
+    bedrock_fast_model_id: str | None = None
     # Bounded so a throttled/stalled Bedrock socket fails fast instead of hanging
     # the worker. boto3 defaults (60s read x 4 retries ≈ 5 min) can wedge the
     # request thread — and the pipeline's ThreadPoolExecutor blocks on it.
@@ -127,6 +134,7 @@ def get_settings() -> Settings:
         bedrock_kb_id=value("BEDROCK_KB_ID"),
         bedrock_kb_search_mode=(value("BEDROCK_KB_SEARCH_MODE") or "vector").strip().lower(),
         bedrock_model_id=value("BEDROCK_MODEL_ID") or "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        bedrock_fast_model_id=value("BEDROCK_FAST_MODEL_ID"),
         bedrock_connect_timeout=float(value("BEDROCK_CONNECT_TIMEOUT") or 5.0),
         bedrock_read_timeout=float(value("BEDROCK_READ_TIMEOUT") or 25.0),
         bedrock_max_attempts=int(value("BEDROCK_MAX_ATTEMPTS") or 2),
