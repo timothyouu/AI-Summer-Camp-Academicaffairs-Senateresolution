@@ -13,6 +13,9 @@ export interface Answer {
   heading: string;
   paragraphs: string[];
   conflictBanner?: string;
+  // Soft, non-alarming advisory shown to employees. Deliberately avoids the
+  // word "conflict" and points the reader to a higher-up office.
+  advisoryNotice?: string;
   citations: Citation[];
   answerId?: string;
   mode?: "local-index" | "calibrated-static" | "agent-grounded";

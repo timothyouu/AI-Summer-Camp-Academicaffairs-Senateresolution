@@ -92,7 +92,12 @@ function AnswerBody({ answer, showQuestion = false }: { answer: Answer; showQues
         <div><p className="font-semibold text-[#b87800]">Important note</p><p className="mt-1 text-[15px] leading-7">{answer.conflictBanner.replace("Policy conflict — ", "")}</p></div>
       </div>}
 
-      {answer.citations.length > 0 && <><p className="mt-6 text-xs font-bold tracking-[0.08em] text-navy/70">CITED SOURCES</p><div className="mt-2 flex flex-wrap gap-4">
+      {answer.advisoryNotice && <div className="mt-6 flex gap-4 rounded-lg border border-blue-200 bg-blue-50 px-5 py-4 text-navy">
+        <svg className="mt-0.5 h-6 w-6 shrink-0 text-brand-blue" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 7.5h.01" /></svg>
+        <div><p className="font-semibold text-[#243f89]">Before you rely on this</p><p className="mt-1 text-[15px] leading-7">{answer.advisoryNotice}</p></div>
+      </div>}
+
+      {answer.citations.length > 0 &&<><p className="mt-6 text-xs font-bold tracking-[0.08em] text-navy/70">CITED SOURCES</p><div className="mt-2 flex flex-wrap gap-4">
         {answer.citations.filter((citation, index, all) => all.findIndex((item) => item.title === citation.title) === index).map((citation) => <SourceCard key={citation.title} citation={citation} />)}
       </div></>}
       <div className="mt-3 flex justify-end gap-1">

@@ -349,9 +349,14 @@ export async function askQuestion(text: string, role: Role = "reviewer"): Promis
   // tenure-credit case with its two supplied sources (Handbook 304.4.1 and Unit
   // 3 CBA 13.4). Runs before the backend call so it is genuinely static. The
   // answer keeps its honest "sources align" framing — per the locked CLAUDE.md
-  // decision we do not manufacture a service-credit conflict banner here.
+  // decision we do not manufacture a service-credit conflict banner here. Instead
+  // it carries a soft advisory that avoids the word "conflict" and routes the
+  // reader to a higher-up office to confirm how the guidance applies.
   if (role === "employee" && /conflict|conflicting|contradict/i.test(question)) {
-    return cloneAnswer(conversationAnswers["service-credit"], question);
+    return {
+      ...cloneAnswer(conversationAnswers["service-credit"], question),
+      advisoryNotice: "This guidance can depend on the specifics of your appointment, so treat it as a starting point rather than a final determination. Before you rely on it, please consult your dean, the Provost's office, or the appropriate office to confirm how it applies to your situation.",
+    };
   }
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (import.meta.env.VITE_USE_COGNITO !== "true") headers["X-Role"] = role;
