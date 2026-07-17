@@ -18,6 +18,15 @@ UPLOAD_DIR = CORPUS_DIR / "uploads"
 # import the FastAPI app), so it lives here rather than in uploads.py.
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
+# Use the US cross-region inference profile explicitly. The corresponding
+# global profile is denied by the organization's SCP, while this profile is
+# available from the deployment region (us-west-2).
+DEFAULT_BEDROCK_MODEL_ID = "us.anthropic.claude-sonnet-4-6"
+DEFAULT_BEDROCK_STREAMING = False
+DEFAULT_BEDROCK_MAX_TOKENS = 1024
+DEFAULT_BEDROCK_TEMPERATURE = 0.0
+DEFAULT_BEDROCK_GENERATION_TIMEOUT_SECONDS = 20.0
+
 # Vite's default port, plus the next port it falls back to when 5173 is taken.
 DEFAULT_DEV_ORIGINS = (
     "http://localhost:5173", "http://127.0.0.1:5173",
@@ -28,10 +37,9 @@ DEFAULT_DEV_ORIGINS = (
 def allowed_origins() -> list[str]:
     """Browser origins the API accepts, overridable for non-default dev ports.
 
-    Deployed traffic is CORS-checked by API Gateway and the Lambda Function URL
-    (both fed by the stack's `frontendOrigin` context), so this list only has to
-    cover local dev — where a second worktree lands on an unexpected Vite port
-    and would otherwise be blocked with no way to configure it.
+    The stack injects its `frontendOrigin` context into FRONTEND_ORIGINS so the
+    FastAPI middleware, API Gateway, and Lambda Function URL enforce the same
+    allowlist. Local runs can also override this for non-default Vite ports.
     """
     configured = os.getenv("FRONTEND_ORIGINS")
     if not configured:
@@ -45,6 +53,12 @@ class Settings:
     aws_profile: str | None = None
     dynamodb_endpoint_url: str | None = None
     bedrock_kb_id: str | None = None
+    bedrock_model_id: str = DEFAULT_BEDROCK_MODEL_ID
+    bedrock_streaming: bool = DEFAULT_BEDROCK_STREAMING
+    bedrock_max_tokens: int = DEFAULT_BEDROCK_MAX_TOKENS
+    bedrock_temperature: float = DEFAULT_BEDROCK_TEMPERATURE
+    bedrock_generation_timeout_seconds: float = DEFAULT_BEDROCK_GENERATION_TIMEOUT_SECONDS
+    bedrock_generation_enabled: bool = False
     bedrock_guardrail_id: str | None = None
     bedrock_guardrail_version: str | None = None
     ddb_conflicts_table: str | None = None
@@ -113,10 +127,16 @@ def get_settings() -> Settings:
     """
     value = lambda name: os.getenv(name) or None
     first = lambda *names: next((candidate for name in names if (candidate := value(name))), None)
+    enabled = lambda name: (value(name) or "").strip().lower() in {"1", "true", "yes", "on"}
     return Settings(
         aws_region=value("AWS_REGION"), aws_profile=value("AWS_PROFILE"),
         dynamodb_endpoint_url=value("DYNAMODB_ENDPOINT_URL"),
         bedrock_kb_id=value("BEDROCK_KB_ID"),
+        bedrock_model_id=value("BEDROCK_MODEL_ID") or DEFAULT_BEDROCK_MODEL_ID,
+        bedrock_generation_timeout_seconds=float(
+            value("BEDROCK_GENERATION_TIMEOUT_SECONDS") or DEFAULT_BEDROCK_GENERATION_TIMEOUT_SECONDS
+        ),
+        bedrock_generation_enabled=enabled("BEDROCK_GENERATION_ENABLED"),
         bedrock_guardrail_id=value("BEDROCK_GUARDRAIL_ID"),
         bedrock_guardrail_version=value("BEDROCK_GUARDRAIL_VERSION"),
         ddb_conflicts_table=first("DDB_CONFLICTS_TABLE", "DYNAMODB_CONFLICTS_TABLE"),

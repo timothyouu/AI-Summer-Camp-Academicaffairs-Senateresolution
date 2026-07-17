@@ -55,6 +55,8 @@ succeed but the Lambda will 500 on cold start with an `ImportError`:
 
 Env var names on the API and ingestion Lambdas are pinned to exactly what
 `backend/app/config.py`'s `get_settings()` reads: `BEDROCK_KB_ID`,
+`BEDROCK_MODEL_ID` (pinned by the stack to the SCP-compatible US regional
+profile `us.anthropic.claude-sonnet-4-6`),
 `DDB_CONFLICTS_TABLE`, `DDB_UPLOADS_TABLE`, `DDB_REGISTRY_TABLE`,
 `DDB_PERMISSIONS_TABLE`, `DDB_DRAFTS_TABLE`, `CORPUS_BUCKET`,
 `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID` (the ingestion and catalog
@@ -95,10 +97,31 @@ change.
 
 ## CORS and Cognito redirects: pass the frontend origin at deploy time
 
+### Cognito is an explicit opt-in
+
+The demo default keeps the hardcoded local sign-in flow. By default, the API
+Lambda receives no `COGNITO_*` variables and API Gateway leaves the proxy route
+without an authorizer. To enable the existing Cognito JWT flow, pass the same context on
+every synth/deploy command:
+
+```bash
+cdk synth -c enableCognito=true
+cdk deploy -c enableCognito=true
+```
+
+When enabled, the stack injects both Cognito IDs into the API Lambda and attaches
+the user-pool authorizer to `/{proxy+}`. The health route remains open in both
+modes. Also set the frontend Cognito variables documented in
+`frontend/.env.example`. As with `frontendOrigin`, omitting `enableCognito=true`
+on a later deploy returns the stack to the Cognito-off demo default.
+
 One CDK context value, `frontendOrigin`, drives two things that both need
 the deployed frontend's exact URL:
 
-1. **API CORS.** API Gateway HTTP APIs treat every CORS `allow_origins`
+1. **API CORS.** The stack applies one allowlist to API Gateway, the Lambda
+   Function URL, and FastAPI's own CORS middleware (via the API Lambda's
+   `FRONTEND_ORIGINS` environment variable). API Gateway HTTP APIs treat every
+   CORS `allow_origins`
    entry as a **literal string** — a wildcard like
    `https://*.amplifyapp.com` never matches anything, so it is not used
    here. The stack always allows the two localhost dev origins

@@ -206,7 +206,7 @@ def ingest_catalog(pages: list[CatalogPage], *, edition_year: int, is_current: b
             import boto3  # type: ignore[import-not-found]
 
             client = boto3.client("s3", region_name=settings.aws_region)
-            key = f"raw/catalog/{edition_year}/{slug}.md"
+            key = f"corpus/raw/catalog/{edition_year}/{slug}.md"
             client.put_object(
                 Bucket=settings.corpus_bucket,
                 Key=key,
@@ -259,5 +259,5 @@ def _register_remote(slug: str, page: CatalogPage, edition_year: int, is_current
         section_index={page.title: page.url},
         edition_year=edition_year,
         is_current=is_current,
-        s3_key=f"raw/catalog/{edition_year}/{slug}.md",
+        s3_key=f"corpus/raw/catalog/{edition_year}/{slug}.md",
     ))

@@ -1,5 +1,21 @@
 # Shipping Tasks — Policy Intelligence Assistant
 
+## Deployment status (2026-07-16)
+
+- [x] Python dependencies installed and verified.
+- [x] Docker Desktop running with WSL integration; AWS SSO profile verified in `us-west-2` (Oregon).
+- [x] `PolicyIntelligenceStack` deployed successfully.
+- [x] Initial corpus uploaded and Bedrock Knowledge Base ingestion completed (16 sources, 0 failures).
+- [x] Conflict records seeded (3 records).
+- [x] Current and archived catalogs scraped; final Knowledge Base ingestion completed (89 sources scanned, 0 failures).
+- [x] Amplify frontend deployed at `https://prod.d2m2fhc9xka1p7.amplifyapp.com` with Cognito disabled.
+- [x] Live CORS, IAM, regional Bedrock model, and Lambda fallback behavior deployed and verified.
+- [x] End-to-end employee chat returned a grounded answer with Handbook and Unit 3 CBA citations.
+- [ ] Connect Amplify to GitHub for automatic `prod` branch deployments (requires GitHub authorization/token).
+- [x] Live upload reached `ready`, was unarchived to Active, and appeared in the deployed Sources UI.
+- [ ] Enable Docker Desktop WSL integration for `Ubuntu-22.04`, then run one CDK reconciliation deploy so CloudFormation formally records the already-live Lambda/IAM hotfixes.
+
+
 Deployment punch-list from the 2026-07-16 repo audit. The code is ship-ready:
 152 backend tests pass, tsc + vite build clean, `main`/`prod` in sync, and all
 backend/AWS service wiring is complete in the CDK stack (S3 → ingestion Lambda →
@@ -41,8 +57,11 @@ notes in `infra/README.md`.
 
 Run `infra/scripts/prepare_corpus.py` (validate first, then with
 `--bucket $CORPUS_BUCKET` from the stack output). Do NOT raw
-`aws s3 cp --recursive` — files must land under the `handbook/`, `cba/`,
-`resolutions/`, `synthetic/` prefixes with `.metadata.json` sidecars. Then:
+`aws s3 cp --recursive` — the Bedrock data source uses one `corpus/` prefix,
+with reviewed `handbook/`, `cba/`, `resolutions/`, and `synthetic/` taxonomy
+and `.metadata.json` sidecars beneath it. Pass both the corpus bucket and
+registry table outputs so the supplied sources are registered active without
+reactivating anything previously archived. Then:
 
 ```bash
 aws bedrock-agent start-ingestion-job \
@@ -76,20 +95,23 @@ Connect the `prod` branch to Amplify Hosting (`amplify.yml` exists,
 `VITE_API_BASE_URL` = `ApiUrl` output, `VITE_AGENT_BASE_URL` =
 `AgentFunctionUrl` output (required — chat/check-resolution 5xx at ~29s via API
 Gateway without it). Add the `/<*>` → `/index.html` `200 (Rewrite)` rule.
-Cognito `VITE_*` vars stay unset — demo login stays on (locked decision).
+Cognito `VITE_*` vars stay unset — demo login stays on (locked decision). The
+resulting branch origin is `https://prod.dXXXX.amplifyapp.com`, not `main`.
 
 ## 8. Redeploy with frontendOrigin for CORS, then verify end-to-end
 
 Once the Amplify URL is known:
 
 ```bash
-cd infra && cdk deploy -c frontendOrigin=https://main.dXXXX.amplifyapp.com
+cd infra && cdk deploy -c frontendOrigin=https://prod.dXXXX.amplifyapp.com
 ```
 
 (exact scheme + host, no trailing slash) so Cognito and both API CORS policies
 register it. Then AWS_SETUP.md §6: the service-credit question returns
-KB-backed citations; a PDF upload goes pending → ingesting → ready and is
-answerable; role routing works via demo login.
+KB-backed citations; a PDF upload goes pending → ingesting → ready. New uploads
+are intentionally archived under `corpus/uploads/`; use **Sources > Archive >
+Unarchive** before checking that the uploaded document is answerable. Role
+routing works via demo login.
 
 ## 9. Update the stale CLAUDE.md constraint about the missing handbook PDF
 

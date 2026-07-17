@@ -24,7 +24,7 @@ def handler(event: dict[str, Any], context: object) -> dict[str, int]:
         # MAX_UPLOAD_BYTES limit is enforced here from the event's object size
         # before any ingestion job is started.
         if int(s3_object.get("size", 0)) > MAX_UPLOAD_BYTES:
-            # Remove the object too: the KB data source includes uploads/, so a
+            # Remove the object too: the KB data source includes corpus/uploads/, so a
             # leftover oversized file would ride along with the next sync.
             bucket_name = str(record["s3"].get("bucket", {}).get("name", ""))
             if bucket_name:
@@ -65,9 +65,15 @@ def handler(event: dict[str, Any], context: object) -> dict[str, int]:
 
 def _upload_from_key(encoded_key: str) -> tuple[str, str]:
     parts = unquote_plus(encoded_key).split("/")
-    if len(parts) < 3 or parts[0] != "uploads" or not parts[1] or not parts[-1]:
-        raise ValueError("S3 upload key must have the form uploads/{upload_id}/{filename}")
-    return parts[1], parts[-1]
+    if (
+        len(parts) < 4
+        or parts[0] != "corpus"
+        or parts[1] != "uploads"
+        or not parts[2]
+        or not parts[-1]
+    ):
+        raise ValueError("S3 upload key must have the form corpus/uploads/{upload_id}/{filename}")
+    return parts[2], parts[-1]
 
 
 def _data_source_id(client: Any, knowledge_base_id: str) -> str:
