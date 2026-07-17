@@ -57,23 +57,22 @@ function Icon({ name }: { name: IconName }) {
 
 export default function Sidebar({ role }: { role: Role }) {
   const items = role === "reviewer" ? reviewerItems : employeeItems;
-  const navClass = ({ isActive }: { isActive: boolean }) => `relative mx-2 flex min-h-20 flex-col items-center justify-center gap-1 rounded-xl px-2 text-xs transition-colors ${isActive ? "bg-brand-blue/10 text-brand-blue before:absolute before:-left-2 before:h-9 before:w-0.5 before:rounded-r-full before:bg-brand-blue" : "text-navy hover:bg-navy/5 hover:text-brand-blue"}`;
+  const navClass = ({ isActive }: { isActive: boolean }) => `relative mx-2 flex min-h-16 flex-col items-center justify-center gap-1 rounded-xl px-2 text-xs transition-colors ${isActive ? "bg-brand-blue/10 text-brand-blue before:absolute before:-left-2 before:h-9 before:w-0.5 before:rounded-r-full before:bg-brand-blue" : "text-navy hover:bg-navy/5 hover:text-brand-blue"}`;
 
   return (
     <aside className="fixed inset-y-0 left-0 z-20 flex w-24 flex-col overflow-hidden border-r border-navy/10 bg-cream">
       <div className="flex h-24 items-center justify-center">
         <Link to="/login" aria-label="Return to role selection"><Logo size={45} /></Link>
       </div>
-      <nav className="mt-3 min-h-0 flex-1 overflow-y-auto" aria-label="Primary navigation">
+      <nav className="mt-3 flex min-h-0 flex-1 flex-col justify-center" aria-label="Primary navigation">
         {items.map((item, index) => (
           <NavLink key={`${item.label}-${index}`} to={item.to} end={item.to === "/chats"} className={(state) => navClass({ isActive: item.showActive !== false && state.isActive })}>
             <span className={item.icon === "plus" ? "flex h-10 w-10 items-center justify-center rounded-full bg-navy text-white shadow-sm" : "flex h-9 w-9 items-center justify-center rounded-lg bg-navy/5"}><Icon name={item.icon} /></span>
-            <span>{item.label}</span>
+            <span className="text-center">{item.label}</span>
           </NavLink>
         ))}
       </nav>
       <div className="mx-5 shrink-0 border-t border-navy/10 py-3">
-        <div className="flex flex-col items-center gap-1 py-3 text-xs text-navy"><Icon name="bell" /><span>Notifications</span></div>
         <div className="flex items-center justify-center py-3 text-navy">
           <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-navy text-sm text-white">AB<span className="absolute right-0 top-0 h-3 w-3 rounded-full bg-gold ring-2 ring-cream" /></span>
         </div>
